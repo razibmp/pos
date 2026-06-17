@@ -1,0 +1,83 @@
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: hc-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: hcroot2024
+      MYSQL_DATABASE: hobbycenter
+      MYSQL_USER: hcuser
+      MYSQL_PASSWORD: hcpass2024
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-phcroot2024"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./server
+    container_name: hc-api
+    expose:
+      - "3001"
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: hobbycenter
+      DB_USER: hcuser
+      DB_PASSWORD: hcpass2024
+      PATHAO_CLIENT_ID: nXe0R0vbxr
+      PATHAO_CLIENT_SECRET: Favehu42u3KP3qsMHkTzWWzLvhH5MUtdplSUwr7k
+      PATHAO_USERNAME: thehobbycenterd@gmail.com
+      PATHAO_PASSWORD: XjNicveN3
+      PATHAO_STORE_ID: "76249"
+      PATHAO_CITY_ID: "1"
+      PATHAO_ZONE_ID: "57"
+      PATHAO_SENDER_NAME: The Hobby Center
+      PATHAO_SENDER_PHONE: "01839000021"
+      PATHAO_SENDER_ADDRESS: Section 12 Block D Road 16 House 52 Pallabi Mirpur Dhaka 1216
+      EMAIL_USER: your_gmail@gmail.com
+      EMAIL_PASS: your_gmail_app_password
+      EMAIL_REPORT_TO: your_report_email@gmail.com
+      WC_URL: https://hobbycenterbd.com
+      WC_KEY: ck_519a83df91ea4df972f9505ae92d75e615ba6530
+      WC_SECRET: cs_9422cddb57db36a12a01fd2601ad2a906f8ef183
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: hc-frontend
+    expose:
+      - "80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: hc-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local
