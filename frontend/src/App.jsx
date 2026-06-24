@@ -1524,6 +1524,7 @@ function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
   const [approving,setApproving]=useState(null);
   const [finalPrices,setFinalPrices]=useState({});
   const [selectedProducts,setSelectedProducts]=useState({});
+  const [finalQtys,setFinalQtys]=useState({});
 
   const approvePending=async(id)=>{
     const fp=finalPrices[id];
@@ -1531,7 +1532,8 @@ function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
     setApproving(id);
     try{
       const product_id=selectedProducts[id]?+selectedProducts[id]:null;
-      const r=await API.approveOrder(id,{final_price:+fp,product_id});
+      const qty=finalQtys[id]?+finalQtys[id]:1;
+      const r=await API.approveOrder(id,{final_price:+fp,product_id,qty});
       toast("✅ Approved! Pathao: "+(r.consignment_id||"pending"));
       reload();
     }catch(e){toast("❌ "+e.message);}
@@ -1607,18 +1609,33 @@ function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
     {pendingCount>0&&<Card style={{border:"2px solid #F59E0B",background:"#FFFBEB"}}>
       <CT>⏳ Pending Approval ({pendingCount}) <span style={{fontSize:11,color:"#92400E",fontWeight:700}}>Review & set final price before sending to Pathao</span></CT>
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
-        {pendingOrders.filter(o=>o.status==="pending").map(o=><div key={o.id} style={{background:"#fff",borderRadius:12,padding:"14px 16px",border:"1.5px solid #FDE68A"}}>
+        {pendingOrders.filter(o=>o.status==="pending").map(o=>{
+          const isWC=o.source==="woocommerce";
+          const wcItems=isWC&&o.wc_items?JSON.parse(o.wc_items):null;
+          return <div key={o.id} style={{background:"#fff",borderRadius:12,padding:"14px 16px",border:`1.5px solid ${isWC?"#BFDBFE":"#FDE68A"}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10,flexWrap:"wrap",gap:8}}>
             <div>
-              <div style={{fontWeight:800,fontSize:14}}>{o.customer_name} <span style={{fontSize:11,color:"#9CA3AF",fontWeight:600}}>#{o.inv}</span></div>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                <span style={{fontWeight:800,fontSize:14}}>{o.customer_name}</span>
+                <span style={{fontSize:11,color:"#9CA3AF",fontWeight:600}}>#{o.inv}</span>
+                {isWC
+                  ?<Pill bg="#DBEAFE" color="#1D4ED8">🛒 WooCommerce</Pill>
+                  :<Pill bg="#FEF3C7" color="#92400E">📬 Order Form</Pill>}
+              </div>
               <div style={{fontSize:12,color:"#6B7280",marginTop:2}}>📞 {o.customer_phone}</div>
               <div style={{fontSize:12,color:"#6B7280"}}>📍 {o.customer_address}</div>
-              <div style={{fontSize:12,color:"#1A1A2E",marginTop:4,fontWeight:700}}>📦 {o.product_details}</div>
+              {wcItems
+                ?<div style={{marginTop:6,background:"#EFF6FF",borderRadius:8,padding:"6px 10px"}}>
+                  <div style={{fontSize:10,fontWeight:800,color:"#1D4ED8",textTransform:"uppercase",marginBottom:3}}>WC Items</div>
+                  {wcItems.map((item,i)=><div key={i} style={{fontSize:12,color:"#1E40AF",fontWeight:600}}>• {item}</div>)}
+                </div>
+                :<div style={{fontSize:12,color:"#1A1A2E",marginTop:4,fontWeight:700}}>📦 {o.product_details}</div>
+              }
             </div>
             <div style={{textAlign:"right",flexShrink:0}}>
               <div style={{fontSize:11,color:"#9CA3AF"}}>{o.created_at}</div>
               <Pill bg={o.delivery_type==="outside"?"#DBEAFE":"#D1FAE5"} color={o.delivery_type==="outside"?"#1E40AF":"#065F46"}>{o.delivery_type==="outside"?"🗺️ Outside ৳150":"🏙️ Inside ৳80"}</Pill>
-              <div style={{fontSize:12,color:"#9CA3AF",marginTop:4}}>Customer stated: <b>{fmt(o.product_price)}</b></div>
+              <div style={{fontSize:12,color:"#9CA3AF",marginTop:4}}>{isWC?"WC Total":"Customer stated"}: <b>{fmt(o.product_price)}</b></div>
             </div>
           </div>
           <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
@@ -1627,6 +1644,11 @@ function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
               <input type="number" value={finalPrices[o.id]||o.product_price||""} onChange={e=>setFinalPrices(p=>({...p,[o.id]:e.target.value}))}
                 style={{width:"100%",border:"1.5px solid #F59E0B",borderRadius:8,padding:"8px 10px",fontFamily:"'Nunito',sans-serif",fontSize:14,fontWeight:700,outline:"none",background:"#FFFBEB"}}
                 placeholder="Enter final price"/>
+            </div>
+            <div style={{flex:"0 1 80px"}}>
+              <label style={{fontSize:9,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",display:"block",marginBottom:4}}>Qty</label>
+              <input type="number" min="1" value={finalQtys[o.id]||1} onChange={e=>setFinalQtys(p=>({...p,[o.id]:e.target.value}))}
+                style={{width:"100%",border:"1.5px solid #F0D9C0",borderRadius:8,padding:"8px 10px",fontFamily:"'Nunito',sans-serif",fontSize:14,fontWeight:700,outline:"none",background:"#FFFAF7"}}/>
             </div>
             <div style={{flex:"1 1 160px"}}>
               <label style={{fontSize:9,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",display:"block",marginBottom:4}}>Link Inventory Item (deducts stock)</label>
@@ -1637,15 +1659,15 @@ function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
               </select>
             </div>
             {finalPrices[o.id]&&<div style={{background:"#FFF8F0",borderRadius:8,padding:"8px 12px",fontSize:13,fontWeight:800,color:"#FF6B35",flexShrink:0}}>
-              Total COD: {fmt((+finalPrices[o.id]||0)+(+o.delivery_charge||80))}
-              {selectedProducts[o.id]&&(()=>{const p=products.find(p=>p.id===+selectedProducts[o.id]);return p?<div style={{fontSize:10,color:"#06D6A0",fontWeight:700,marginTop:2}}>Profit: {fmt((+finalPrices[o.id]||0)-p.buy)}</div>:null;})()}
+              Total COD: {fmt((+finalPrices[o.id]||0)*(+finalQtys[o.id]||1)+(+o.delivery_charge||80))}
+              {selectedProducts[o.id]&&(()=>{const p=products.find(p=>p.id===+selectedProducts[o.id]);return p?<div style={{fontSize:10,color:"#06D6A0",fontWeight:700,marginTop:2}}>Profit: {fmt(((+finalPrices[o.id]||0)-p.buy)*(+finalQtys[o.id]||1))}</div>:null;})()}
             </div>}
             <button onClick={()=>approvePending(o.id)} disabled={approving===o.id} style={{background:"linear-gradient(135deg,#06D6A0,#10B981)",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontFamily:"'Baloo 2',cursive",fontSize:13,fontWeight:800,cursor:"pointer",flexShrink:0,opacity:approving===o.id?.6:1}}>
               {approving===o.id?"⏳ Creating...":"✅ Approve & Send Pathao"}
             </button>
             <button onClick={()=>rejectPending(o.id)} style={{background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:800,cursor:"pointer",flexShrink:0}}>❌ Reject</button>
           </div>
-        </div>)}
+        </div>;})}
       </div>
     </Card>}
 

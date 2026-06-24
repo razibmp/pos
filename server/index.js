@@ -107,6 +107,9 @@ async function initDB() {
   try { await q("ALTER TABLE sales ADD COLUMN address TEXT"); } catch(e) {}
   try { await q("ALTER TABLE pending_orders ADD COLUMN product_id INT DEFAULT NULL"); } catch(e) {}
   try { await q("ALTER TABLE pending_orders ADD COLUMN qty INT DEFAULT 1"); } catch(e) {}
+  try { await q("ALTER TABLE pending_orders ADD COLUMN source VARCHAR(30) DEFAULT 'form'"); } catch(e) {}
+  try { await q("ALTER TABLE pending_orders ADD COLUMN wc_order_id INT DEFAULT NULL"); } catch(e) {}
+  try { await q("ALTER TABLE pending_orders ADD COLUMN wc_items TEXT DEFAULT NULL"); } catch(e) {}
 
   await q(`CREATE TABLE IF NOT EXISTS expenses (
     id         INT AUTO_INCREMENT PRIMARY KEY,
@@ -856,38 +859,41 @@ app.post("/api/pending-orders/:id/approve", async (req, res) => {
     const [[po]] = await q("SELECT * FROM pending_orders WHERE id=?", [req.params.id]);
     if (!po) return res.status(404).json({ error: "Not found" });
 
-    const final_price     = parseFloat(req.body.final_price) || +po.product_price;
+    const isWC           = po.source === "woocommerce";
+    const final_price    = parseFloat(req.body.final_price) || +po.product_price;
     const delivery_charge = +po.delivery_charge || 80;
-    const total           = final_price + delivery_charge;
-    const today           = new Date().toISOString().split("T")[0];
-    const timeNow         = new Date().toLocaleTimeString("en-BD", {hour:"2-digit", minute:"2-digit"});
+    const total          = final_price + delivery_charge;
+    const today          = new Date().toISOString().split("T")[0];
+    const timeNow        = new Date().toLocaleTimeString("en-BD", {hour:"2-digit", minute:"2-digit"});
 
-    // Use product_id from manager override, or fall back to what customer selected on the form
     const product_id = req.body.product_id ? +req.body.product_id : (po.product_id ? +po.product_id : null);
-    const order_qty  = po.qty ? +po.qty : 1;
-    let buy_price = 0, sale_emoji = "🛒";
+    const order_qty  = req.body.qty ? +req.body.qty : (po.qty ? +po.qty : 1);
+    let buy_price = 0, sale_emoji = isWC ? "🛒" : "🛒";
     if (product_id) {
       const [[prod]] = await q("SELECT buy, emoji FROM products WHERE id=?", [product_id]);
       if (prod) { buy_price = +prod.buy; sale_emoji = prod.emoji || "🛒"; }
     }
-    const profit = final_price - buy_price;
+    const profit = (final_price - buy_price) * order_qty;
+
+    const paymentMethod = isWC ? "WooCommerce" : "Cash on delivery (COD)";
+    const soldBy        = isWC ? "WooCommerce" : "Order Form";
 
     // Create sale
     const [saleRow] = await q(
       "INSERT INTO sales (inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,phone,address,payment,sold_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       [po.inv, today, timeNow, product_id, po.product_details||"Order", sale_emoji,
-       order_qty, final_price, buy_price, final_price, profit,
+       order_qty, final_price, buy_price, final_price * order_qty, profit,
        po.customer_name, po.customer_phone, po.customer_address,
-       "Cash on delivery (COD)", "Order Form"]
+       paymentMethod, soldBy]
     );
 
     // Deduct stock if a product was linked
     if (product_id) {
       await q("UPDATE products SET stock = stock - ? WHERE id = ?", [order_qty, product_id]);
-      await logStockChange(product_id, -order_qty, "sale", po.inv, "Order Form");
+      await logStockChange(product_id, -order_qty, "sale", po.inv, soldBy);
     }
 
-    // Create Pathao
+    // Create Pathao order
     let consignment_id = null, pathao_status = "Pending";
     try {
       const pathaoRes = await Pathao.createOrder({
@@ -897,9 +903,9 @@ app.post("/api/pending-orders/:id/approve", async (req, res) => {
         recipient_address : po.customer_address,
         amount_to_collect : total,
         item_description  : po.product_details || "Order",
-        item_quantity     : 1,
+        item_quantity     : order_qty,
         item_weight       : 0.5,
-        note              : po.notes || "",
+        note              : po.notes || (isWC ? `WooCommerce Order #${po.wc_order_id}` : ""),
       });
       console.log("Pathao approve:", JSON.stringify(pathaoRes.body));
       consignment_id = pathaoRes.body?.data?.consignment_id || null;
@@ -910,12 +916,18 @@ app.post("/api/pending-orders/:id/approve", async (req, res) => {
     const [delRow] = await q(
       "INSERT INTO deliveries (sale_id,consignment_id,merchant_order_id,recipient_name,recipient_phone,recipient_address,amount_to_collect,item_description,item_quantity,item_weight,note,status,pathao_status,delivery_type,delivery_charge) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       [saleRow.insertId, consignment_id, po.inv, po.customer_name, po.customer_phone,
-       po.customer_address, total, po.product_details||"Order", 1, 0.5, po.notes||"",
+       po.customer_address, total, po.product_details||"Order", order_qty, 0.5, po.notes||"",
        "pending", pathao_status, po.delivery_type||"inside", delivery_charge]
     );
 
     await q("UPDATE pending_orders SET status='approved', sale_id=?, delivery_id=? WHERE id=?",
       [saleRow.insertId, delRow.insertId, req.params.id]);
+
+    // For WooCommerce orders, update the wc_orders record with sale and delivery IDs
+    if (isWC && po.wc_order_id) {
+      await q("UPDATE wc_orders SET mgt_sale_id=?, delivery_id=?, status='approved' WHERE wc_order_id=?",
+        [saleRow.insertId, delRow.insertId, po.wc_order_id]);
+    }
 
     res.json({ ok: true, consignment_id, pathao_status, total, sale_id: saleRow.insertId });
   } catch(e) {
@@ -1118,11 +1130,11 @@ async function wcLog(type, status, message) {
   catch(e) { console.error("Log error:", e.message); }
 }
 
-// Helper: process a single WC order into MGT
+// Helper: process a single WC order into MGT pending approval queue
 async function processWCOrder(order) {
   const wcOrderId = order.id;
 
-  // Check if already processed
+  // Check if already in wc_orders (processed or pending)
   const [[existing]] = await q("SELECT id FROM wc_orders WHERE wc_order_id=?", [wcOrderId]);
   if (existing) return { skipped: true, reason: "already processed" };
 
@@ -1131,108 +1143,37 @@ async function processWCOrder(order) {
   const customerAddress = [order.shipping?.address_1, order.shipping?.address_2, order.shipping?.city].filter(Boolean).join(", ") || order.billing?.address_1 || "";
   const paymentMethod   = order.payment_method_title || "WooCommerce";
   const orderTotal      = +order.total || 0;
-  const today           = new Date().toISOString().split("T")[0];
-  const timeNow         = new Date().toLocaleTimeString("en-BD", {hour:"2-digit", minute:"2-digit"});
   const inv             = `WC-${wcOrderId}`;
 
-  let totalProfit = 0;
   const itemSummary = [];
-
-  // Process each line item
   for (const item of (order.line_items || [])) {
-    const wcProductId = item.product_id;
-    const qty         = item.quantity || 1;
-    const price       = +item.total / qty;
-    const sku         = item.sku || "";
-
-    // Find MGT product by WC product ID or SKU
-    let mgtProduct = null;
-    const [[mapRow]] = await q("SELECT mgt_product_id FROM wc_product_map WHERE wc_product_id=?", [wcProductId]);
-    if (mapRow) {
-      const [[prod]] = await q("SELECT * FROM products WHERE id=?", [mapRow.mgt_product_id]);
-      mgtProduct = prod;
-    } else if (sku) {
-      // Try to match by SKU stored in product brand field or name
-      const likeStr = "%"+sku+"%";
-      const [prods] = await q("SELECT * FROM products WHERE brand=? OR name LIKE ?", [sku, likeStr]);
-      if (prods.length > 0) mgtProduct = prods[0];
-    }
-
-    if (mgtProduct) {
-      const buyPrice = +mgtProduct.buy || 0;
-      const profit   = (price - buyPrice) * qty;
-      totalProfit   += profit;
-
-      // Deduct stock
-      await q("UPDATE products SET stock = stock - ? WHERE id=?", [qty, mgtProduct.id]);
-      await logStockChange(mgtProduct.id, -qty, "woocommerce_order", inv, "WooCommerce");
-
-      itemSummary.push(`${item.name} x${qty}`);
-    } else {
-      itemSummary.push(`${item.name} x${qty} (unmapped)`);
-      await wcLog("order_sync", "warn", `Product not mapped: ${item.name} (WC ID: ${wcProductId}, SKU: ${sku})`);
-    }
+    itemSummary.push(`${item.name} x${item.quantity || 1}`);
   }
-
-  // Create sale record in MGT
   const productDesc = itemSummary.join(", ");
-  const [saleRow] = await q(
-    `INSERT INTO sales (inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,payment,sold_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [inv, today, timeNow, null, productDesc, "🛒",
-     1, orderTotal, orderTotal - totalProfit, orderTotal, totalProfit,
-     customerName, paymentMethod, "WooCommerce"]
+
+  const isOutside    = !customerAddress.toLowerCase().includes("dhaka");
+  const deliveryCharge = isOutside ? 150 : 80;
+  const total        = orderTotal + deliveryCharge;
+
+  // Route into pending_orders for admin approval before Pathao
+  const [pendingRow] = await q(
+    `INSERT INTO pending_orders (inv,customer_name,customer_phone,customer_address,product_details,product_price,delivery_type,delivery_charge,total,status,source,wc_order_id,wc_items)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [inv, customerName, customerPhone, customerAddress, productDesc, orderTotal,
+     isOutside ? "outside" : "inside", deliveryCharge, total,
+     "pending", "woocommerce", wcOrderId, JSON.stringify(itemSummary)]
   );
-  const saleId = saleRow.insertId;
 
-  // Auto-create Pathao delivery if address provided
-  let deliveryId = null;
-  if (customerPhone && customerAddress) {
-    try {
-      const isOutside = !customerAddress.toLowerCase().includes("dhaka");
-      const deliveryCharge = isOutside ? 150 : 80;
-
-      const pathaoRes = await Pathao.createOrder({
-        merchant_order_id : inv,
-        recipient_name    : customerName,
-        recipient_phone   : customerPhone,
-        recipient_address : customerAddress,
-        amount_to_collect : orderTotal,
-        item_description  : productDesc.substring(0, 100),
-        item_quantity     : order.line_items?.reduce((a,i) => a + i.quantity, 0) || 1,
-        item_weight       : 0.5,
-        note              : `WooCommerce Order #${wcOrderId}`,
-      });
-
-      const consignment_id = pathaoRes.body?.data?.consignment_id || null;
-      const pathao_status  = pathaoRes.body?.data?.order_status   || "Pending";
-
-      const [delRow] = await q(
-        `INSERT INTO deliveries (sale_id,consignment_id,merchant_order_id,recipient_name,recipient_phone,
-         recipient_address,amount_to_collect,item_description,item_quantity,item_weight,note,status,pathao_status,delivery_type,delivery_charge)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [saleId, consignment_id, inv, customerName, customerPhone,
-         customerAddress, orderTotal, productDesc.substring(0,200), 1, 0.5,
-         `WooCommerce Order #${wcOrderId}`, "pending", pathao_status,
-         isOutside ? "outside" : "inside", deliveryCharge]
-      );
-      deliveryId = delRow.insertId;
-      await wcLog("pathao", "success", `Pathao order created: ${consignment_id} for WC order #${wcOrderId}`);
-    } catch(e) {
-      await wcLog("pathao", "error", `Pathao failed for WC order #${wcOrderId}: ${e.message}`);
-    }
-  }
-
-  // Record in wc_orders table
+  // Record in wc_orders with pending_approval status (no sale/delivery yet)
   await q(
-    `INSERT INTO wc_orders (wc_order_id,mgt_sale_id,delivery_id,status,customer_name,customer_phone,customer_address,total,payment_method,items)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    [wcOrderId, saleId, deliveryId, order.status, customerName, customerPhone,
+    `INSERT INTO wc_orders (wc_order_id,status,customer_name,customer_phone,customer_address,total,payment_method,items)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [wcOrderId, "pending_approval", customerName, customerPhone,
      customerAddress, orderTotal, paymentMethod, JSON.stringify(itemSummary)]
   );
 
-  await wcLog("order_sync", "success", `WC order #${wcOrderId} → MGT sale #${saleId}${deliveryId ? ` + Pathao delivery #${deliveryId}` : ""}`);
-  return { success: true, saleId, deliveryId };
+  await wcLog("order_sync", "success", `WC order #${wcOrderId} → pending approval (ID: ${pendingRow.insertId})`);
+  return { success: true, pendingOrderId: pendingRow.insertId };
 }
 
 // WooCommerce order webhook
