@@ -809,13 +809,13 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
           {[["💰 Invested",fmt(invested),"#3B82F6"],["💸 Withdrawn",fmt(withdrawn),"#EF476F"],["💵 Profit Received",fmt(profitReceived),"#06D6A0"]].map(([l,v,c])=>
             <div key={l} style={{background:"#FFF8F0",borderRadius:9,padding:"10px 12px",border:"1px solid #F0E6D3",textAlign:"center"}}><div style={{fontSize:9,color:"#9CA3AF",fontWeight:700,marginBottom:2}}>{l}</div><div style={{fontFamily:"'Baloo 2',cursive",fontSize:15,fontWeight:800,color:c}}>{v}</div></div>)}
         </div>
-        {loan>0&&<div style={{marginBottom:12,padding:"10px 14px",background:"#FFFBEB",borderRadius:9,border:"1px solid #FDE68A"}}>
+        <div style={{marginBottom:12,padding:"10px 14px",background:"#FFFBEB",borderRadius:9,border:"1px solid #FDE68A"}}>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,marginBottom:6}}>
             <span style={{color:"#92400E"}}>🏦 Loan</span>
             <span style={{fontFamily:"'Baloo 2',cursive",color:"#F59E0B",fontSize:15}}>{fmt(loan)}</span>
           </div>
           <Bar value={loan} max={maxLoan} color="#F59E0B"/>
-        </div>}
+        </div>
         {monthlyRows.length>0&&<div style={{marginBottom:14,background:"#F0FDF4",borderRadius:10,padding:"10px 14px",border:"1px solid #BBF7D0"}}>
           <div style={{fontSize:10,fontWeight:800,color:"#065F46",textTransform:"uppercase",marginBottom:8}}>💵 Monthly Profit Received</div>
           <div style={{display:"flex",flexDirection:"column",gap:5}}>
