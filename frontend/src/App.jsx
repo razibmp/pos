@@ -1824,7 +1824,7 @@ export default function App(){
         <div className="hide-mobile" style={{fontSize:12,color:"#6E6E73",fontWeight:500}}>{dateStr}</div>
         <div style={{display:"flex",alignItems:"center",gap:7,background:"#F5F5F7",borderRadius:20,padding:"5px 12px 5px 8px",border:"1px solid #E5E5EA"}}>
           <span style={{fontSize:15}}>{user.emoji}</span>
-          <div className="hide-mobile"><span style={{fontSize:13,fontWeight:600,color:"#1D1D1F",letterSpacing:"-.01em"}}>{user.name}</span><span style={{fontSize:11,color:"#6E6E73",fontWeight:500",marginLeft:5}}> · {user.role}</span></div>
+          <div className="hide-mobile"><span style={{fontSize:13,fontWeight:600,color:"#1D1D1F",letterSpacing:"-.01em"}}>{user.name}</span><span style={{fontSize:11,color:"#6E6E73",fontWeight:500,marginLeft:5}}> · {user.role}</span></div>
         </div>
         <button onClick={doLogout} style={{background:"#F2F2F7",color:"#3C3C43",border:"1px solid #E5E5EA",borderRadius:10,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:600}}>Sign Out</button>
       </div>
