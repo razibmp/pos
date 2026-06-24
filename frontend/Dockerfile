@@ -2,9 +2,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json ./
-RUN npm install
+RUN npm install --no-fund --no-audit
 COPY . .
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=512 npm run build
 
 # Stage 2 — Serve with Nginx
 FROM nginx:alpine
