@@ -758,7 +758,7 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
   const del=async id=>{if(!window.confirm("Delete stakeholder?"))return;await API.deleteStakeholder(id);reload();toast("🗑️ Deleted")};
   const addTx=async(sid)=>{if(!txForm.amount){toast("❌ Enter amount!");return;}await API.addTransaction(sid,{type:txForm.type,amount:+txForm.amount,date:txForm.date,note:txForm.note||""});setTxForm({type:"investment",amount:"",date:todayStr(),note:""});reload();toast("✅ Recorded!")};
   const delTx=async id=>{await API.deleteTransaction(id);reload();toast("🗑️ Deleted")};
-  const TX_TYPES={investment:{label:"Investment",color:"#3B82F6",icon:"💰"},withdrawal:{label:"Withdrawal",color:"#EF476F",icon:"💸"},dividend:{label:"Dividend",color:"#06D6A0",icon:"🎁"},loan:{label:"Loan",color:"#F59E0B",icon:"🏦"}};
+  const TX_TYPES={investment:{label:"Investment",color:"#3B82F6",icon:"💰"},withdrawal:{label:"Withdrawal",color:"#EF476F",icon:"💸"},profit_received:{label:"Profit Received",color:"#06D6A0",icon:"💵"},loan:{label:"Loan",color:"#F59E0B",icon:"🏦"}};
   const colors=["#FF6B35","#06D6A0","#8B5CF6","#3B82F6","#F59E0B","#EF476F"];
   const totalInvested=stakeholders.reduce((a,s)=>a+((s.transactions||[]).filter(t=>t.type==="investment").reduce((x,t)=>x+t.amount,0)),0);
   const totalShares=stakeholders.reduce((a,s)=>a+(s.share_pct||0),0);
@@ -769,30 +769,29 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
       <SC icon="📈" label="Net Profit" value={<span style={{color:netProfit>=0?"#06D6A0":"#EF476F"}}>{fmt(netProfit)}</span>} sub="all time" accent="#06D6A0"/>
       <SC icon="💸" label="Total Invested" value={fmt(totalInvested)} accent="#3B82F6"/>
     </div>
-    <div className="split">
-      <Card>
-        <CT>➕ Add Stakeholder</CT>
-        <div style={{display:"flex",flexDirection:"column",gap:11}}>
-          <FI label="Name *" value={form.name} onChange={ff("name")} placeholder="e.g. Razib"/>
-          <div className="grid2" style={{gap:10}}>
-            <FI label="Emoji" value={form.emoji} onChange={ff("emoji")} maxLength={4} placeholder="👤"/>
-            <FI label="Share %" type="number" min="0" max="100" value={form.share_pct} onChange={ff("share_pct")} placeholder="e.g. 40"/>
-          </div>
-          <FI label="Note" value={form.note} onChange={ff("note")} placeholder="e.g. Founder"/>
+    <Card style={{maxWidth:480}}>
+      <CT>➕ Add Stakeholder</CT>
+      <div style={{display:"flex",flexDirection:"column",gap:11}}>
+        <FI label="Name *" value={form.name} onChange={ff("name")} placeholder="e.g. Razib"/>
+        <div className="grid2" style={{gap:10}}>
+          <FI label="Emoji" value={form.emoji} onChange={ff("emoji")} maxLength={4} placeholder="👤"/>
+          <FI label="Share %" type="number" min="0" max="100" value={form.share_pct} onChange={ff("share_pct")} placeholder="e.g. 40"/>
         </div>
-        <Btn onClick={add} style={{width:"100%",marginTop:12}}>➕ Add</Btn>
-      </Card>
-      <Card>
-        <CT>🥧 Share Split</CT>
-        {stakeholders.map((s,i)=>{const col=colors[i%colors.length];return <div key={s.id} style={{marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,marginBottom:4}}><span>{s.emoji} {s.name}</span><span style={{color:col,fontFamily:"'Baloo 2',cursive",fontSize:16}}>{s.share_pct}%</span></div><Bar value={s.share_pct} max={100} color={col}/></div>})}
-      </Card>
-    </div>
+        <FI label="Note" value={form.note} onChange={ff("note")} placeholder="e.g. Founder"/>
+      </div>
+      <Btn onClick={add} style={{width:"100%",marginTop:12}}>➕ Add</Btn>
+    </Card>
     {stakeholders.map((s,i)=>{
       const col=colors[i%colors.length];
       const invested=(s.transactions||[]).filter(t=>t.type==="investment").reduce((a,t)=>a+t.amount,0);
       const withdrawn=(s.transactions||[]).filter(t=>t.type==="withdrawal").reduce((a,t)=>a+t.amount,0);
-      const dividends=(s.transactions||[]).filter(t=>t.type==="dividend").reduce((a,t)=>a+t.amount,0);
-      const myProfit=netProfit*(s.share_pct/100);
+      const profitReceived=(s.transactions||[]).filter(t=>t.type==="profit_received").reduce((a,t)=>a+t.amount,0);
+      const monthlyProfit={};
+      (s.transactions||[]).filter(t=>t.type==="profit_received").forEach(t=>{
+        const m=t.date?.slice(0,7);
+        if(m)monthlyProfit[m]=(monthlyProfit[m]||0)+t.amount;
+      });
+      const monthlyRows=Object.entries(monthlyProfit).sort((a,b)=>b[0].localeCompare(a[0]));
       return <Card key={s.id}>
         <CT>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -804,10 +803,23 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
             <button onClick={()=>del(s.id)} style={{background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:8,padding:"6px 10px",fontSize:12,cursor:"pointer"}}>🗑️</button>
           </div>
         </CT>
-        <div className="grid4" style={{marginBottom:showTx===s.id?14:0}}>
-          {[["💰 Invested",fmt(invested),"#3B82F6"],["💸 Withdrawn",fmt(withdrawn),"#EF476F"],["🎁 Dividends",fmt(dividends),"#06D6A0"],["📈 Profit Share",<span style={{color:myProfit>=0?"#06D6A0":"#EF476F"}}>{fmt(Math.round(myProfit))}</span>,"#8B5CF6"]].map(([l,v,c])=>
+        <div className="grid3" style={{marginBottom:12}}>
+          {[["💰 Invested",fmt(invested),"#3B82F6"],["💸 Withdrawn",fmt(withdrawn),"#EF476F"],["💵 Profit Received",fmt(profitReceived),"#06D6A0"]].map(([l,v,c])=>
             <div key={l} style={{background:"#FFF8F0",borderRadius:9,padding:"10px 12px",border:"1px solid #F0E6D3",textAlign:"center"}}><div style={{fontSize:9,color:"#9CA3AF",fontWeight:700,marginBottom:2}}>{l}</div><div style={{fontFamily:"'Baloo 2',cursive",fontSize:15,fontWeight:800,color:c}}>{v}</div></div>)}
         </div>
+        {monthlyRows.length>0&&<div style={{marginBottom:14,background:"#F0FDF4",borderRadius:10,padding:"10px 14px",border:"1px solid #BBF7D0"}}>
+          <div style={{fontSize:10,fontWeight:800,color:"#065F46",textTransform:"uppercase",marginBottom:8}}>💵 Monthly Profit Received</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {monthlyRows.map(([month,amt])=><div key={month} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13}}>
+              <span style={{color:"#374151",fontWeight:600}}>{new Date(month+"-01").toLocaleDateString("en-BD",{year:"numeric",month:"long"})}</span>
+              <span style={{fontFamily:"'Baloo 2',cursive",fontWeight:800,color:"#06D6A0"}}>{fmt(amt)}</span>
+            </div>)}
+          </div>
+          <div style={{borderTop:"1px solid #BBF7D0",marginTop:8,paddingTop:8,display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800}}>
+            <span style={{color:"#065F46"}}>Total</span>
+            <span style={{fontFamily:"'Baloo 2',cursive",color:"#059669"}}>{fmt(profitReceived)}</span>
+          </div>
+        </div>}
         {showTx===s.id&&<div style={{borderTop:"1.5px dashed #F0D9C0",paddingTop:14}}>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,alignItems:"flex-end"}}>
             <div style={{flex:"1 1 110px"}}><FS value={txForm.type} onChange={e=>setTxForm(p=>({...p,type:e.target.value}))}>{Object.entries(TX_TYPES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}</FS></div>
@@ -819,7 +831,7 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
           {(s.transactions||[]).length===0?<Empty msg="No transactions yet"/>:
           <div className="ovx"><table>
             <thead><TH cols={["Date","Type","Amount","Note",""]}/></thead>
-            <tbody>{[...(s.transactions||[])].map(tx=>{const ti=TX_TYPES[tx.type]||{icon:"💳",color:"#6B7280"};return <tr key={tx.id} style={{borderBottom:"1px solid #F9F0E8"}}><td style={{padding:"7px 10px",color:"#9CA3AF",fontSize:11}}>{tx.date}</td><td style={{padding:"7px 10px"}}><Pill bg={ti.color+"18"} color={ti.color}>{ti.icon} {tx.type}</Pill></td><td style={{padding:"7px 10px",fontWeight:800,color:["withdrawal","dividend"].includes(tx.type)?"#EF476F":"#06D6A0"}}>{["withdrawal","dividend"].includes(tx.type)?"-":"+"}  {fmt(tx.amount)}</td><td style={{padding:"7px 10px",color:"#9CA3AF",fontSize:11}}>{tx.note||"—"}</td><td style={{padding:"7px 10px"}}><button onClick={()=>delTx(tx.id)} style={{background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>🗑️</button></td></tr>})}</tbody>
+            <tbody>{[...(s.transactions||[])].sort((a,b)=>b.date?.localeCompare(a.date)).map(tx=>{const ti=TX_TYPES[tx.type]||{icon:"💳",color:"#6B7280"};const isOut=tx.type==="withdrawal";return <tr key={tx.id} style={{borderBottom:"1px solid #F9F0E8"}}><td style={{padding:"7px 10px",color:"#9CA3AF",fontSize:11}}>{tx.date}</td><td style={{padding:"7px 10px"}}><Pill bg={ti.color+"18"} color={ti.color}>{ti.icon} {ti.label||tx.type}</Pill></td><td style={{padding:"7px 10px",fontWeight:800,color:isOut?"#EF476F":"#06D6A0"}}>{isOut?"-":"+"} {fmt(tx.amount)}</td><td style={{padding:"7px 10px",color:"#9CA3AF",fontSize:11}}>{tx.note||"—"}</td><td style={{padding:"7px 10px"}}><button onClick={()=>delTx(tx.id)} style={{background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>🗑️</button></td></tr>})}</tbody>
           </table></div>}
         </div>}
       </Card>})}
