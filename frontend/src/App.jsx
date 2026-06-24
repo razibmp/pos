@@ -12,8 +12,8 @@ const EXP_CATS = {
   misc:{label:"Misc",icon:"📋",color:"#6B7280"},
 };
 const ROLE_PERMS = {
-  Owner:  {tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","users","deliveries","payouts","stock-history","woocommerce","preorders","orders","settings"],seeFinancials:true},
-  Manager:{tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","deliveries","payouts","stock-history","woocommerce","preorders","orders"],seeFinancials:true},
+  Owner:  {tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","users","deliveries","stock-history","woocommerce","preorders","orders","settings"],seeFinancials:true},
+  Manager:{tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","deliveries","stock-history","woocommerce","preorders","orders"],seeFinancials:true},
   Staff:  {tabs:["sales","inventory"],seeFinancials:false},
 };
 const SESSION_KEY = "hc_session";
@@ -1071,103 +1071,6 @@ function Deliveries({deliveries,products,sales,reload,toast}){
 
 
 
-// ── PAYOUTS ───────────────────────────────────────────────────────────────────
-function Payouts({payouts,deliveries,reload,toast}){
-  const [unpaid,setUnpaid]=useState([]);
-  const [selected,setSelected]=useState([]);
-  const [form,setForm]=useState({payout_ref:"",amount:"",date:new Date().toISOString().split("T")[0],note:""});
-  const [loading,setLoading]=useState(false);
-  const ff=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
-
-  const loadUnpaid=async()=>{
-    try{ const data=await API.getUnpaidDeliveries(); setUnpaid(data); }
-    catch(e){ console.error(e); }
-  };
-  useState(()=>{ loadUnpaid(); },[]);
-
-  const toggleSelect=id=>setSelected(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
-  const selectAll=()=>setSelected(unpaid.map(d=>d.id));
-  const clearSel=()=>setSelected([]);
-
-  const selectedDeliveries=unpaid.filter(d=>selected.includes(d.id));
-  const autoAmount=selectedDeliveries.reduce((a,d)=>a+(+d.amount_to_collect||0)+(+d.delivery_charge||0),0);
-
-  const submit=async()=>{
-    if(!form.amount||selected.length===0){toast("❌ Select deliveries and enter amount!");return;}
-    setLoading(true);
-    try{
-      await API.createPayout({...form,amount:+form.amount,delivery_ids:selected});
-      setForm({payout_ref:"",amount:"",date:new Date().toISOString().split("T")[0],note:""});
-      setSelected([]);
-      await loadUnpaid();
-      reload();
-      toast("✅ Payout recorded!");
-    }catch(e){toast("❌ "+e.message);}
-    finally{setLoading(false);}
-  };
-
-  const del=async id=>{await API.deletePayout(id);await loadUnpaid();reload();toast("🗑️ Payout deleted")};
-
-  const totalPaid=payouts.reduce((a,p)=>a+(+p.amount||0),0);
-  const totalUnpaid=unpaid.reduce((a,d)=>a+(+d.amount_to_collect||0)+(+d.delivery_charge||0),0);
-
-  return <div style={{display:"flex",flexDirection:"column",gap:16}}>
-    <div className="grid4">
-      <SC icon="💳" label="Total Payouts" value={payouts.length} accent="#3B82F6"/>
-      <SC icon="✅" label="Total Received" value={fmt(totalPaid)} accent="#06D6A0"/>
-      <SC icon="⏳" label="Unpaid Deliveries" value={unpaid.length} accent="#F59E0B"/>
-      <SC icon="💰" label="Awaiting Payment" value={fmt(totalUnpaid)} accent="#EF476F"/>
-    </div>
-    <div className="split">
-      <Card>
-        <CT>➕ Record Pathao Payout</CT>
-        <div style={{display:"flex",flexDirection:"column",gap:11}}>
-          <div style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>Select delivered orders included in this payout:</div>
-          {unpaid.length===0?<Empty msg="No unpaid delivered orders"/>:
-          <div style={{maxHeight:220,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
-            <div style={{display:"flex",gap:8,marginBottom:4}}>
-              <button onClick={selectAll} style={{background:"#EDE9FE",color:"#5B21B6",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:800,cursor:"pointer"}}>Select All</button>
-              <button onClick={clearSel} style={{background:"#F3F4F6",color:"#6B7280",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:800,cursor:"pointer"}}>Clear</button>
-            </div>
-            {unpaid.map(d=><div key={d.id} onClick={()=>toggleSelect(d.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",border:(selected.includes(d.id)?"1.5px solid #FF6B35":"1.5px solid #F0D9C0"),borderRadius:9,background:selected.includes(d.id)?"#FFF8F0":"#fff",cursor:"pointer"}}>
-              <div style={{width:18,height:18,borderRadius:4,border:(selected.includes(d.id)?"2px solid #FF6B35":"2px solid #D1D5DB"),background:selected.includes(d.id)?"#FF6B35":"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                {selected.includes(d.id)&&<span style={{color:"#fff",fontSize:11,fontWeight:800}}>✓</span>}
-              </div>
-              <div style={{flex:1,minWidth:0}}><div style={{fontWeight:700,fontSize:12}}>{d.recipient_name}</div><div style={{fontSize:10,color:"#9CA3AF"}}>{d.consignment_id}</div></div>
-              <div style={{textAlign:"right",flexShrink:0}}><div style={{fontWeight:800,fontSize:12,color:"#FF6B35"}}>{fmt((+d.amount_to_collect||0)+(+d.delivery_charge||0))}</div><div style={{fontSize:10,color:"#9CA3AF"}}>COD + charge</div></div>
-            </div>)}
-          </div>}
-          {selected.length>0&&<div style={{background:"#FFF8F0",borderRadius:9,padding:"10px 12px",border:"1.5px solid #F0D9C0",fontSize:12,fontWeight:700}}>
-            {selected.length} order(s) selected · Expected: <span style={{color:"#FF6B35"}}>{fmt(autoAmount)}</span>
-            <button onClick={()=>setForm(p=>({...p,amount:String(autoAmount)}))} style={{marginLeft:8,background:"#FF6B35",color:"#fff",border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",fontWeight:800}}>Use This</button>
-          </div>}
-          <div className="grid2" style={{gap:10}}>
-            <FI label="Pathao Payout Ref" value={form.payout_ref} onChange={ff("payout_ref")} placeholder="e.g. PAY-12345"/>
-            <FI label="Amount Received (৳) *" type="number" value={form.amount} onChange={ff("amount")} placeholder="0"/>
-            <FI label="Date" type="date" value={form.date} onChange={ff("date")}/>
-            <FI label="Note" value={form.note} onChange={ff("note")} placeholder="Optional..."/>
-          </div>
-        </div>
-        <Btn onClick={submit} style={{width:"100%",marginTop:12,opacity:loading?.6:1}}>{loading?"⏳ Saving...":"💳 Record Payout"}</Btn>
-      </Card>
-      <Card>
-        <CT>📋 Payout History ({payouts.length})</CT>
-        {payouts.length===0?<Empty msg="No payouts recorded yet"/>:
-        payouts.map(p=><div key={p.id} style={{padding:"10px 0",borderBottom:"1px solid #F9F0E8"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-            <div><div style={{fontWeight:800,fontSize:13}}>{p.payout_ref||"Payout #"+p.id}</div><div style={{fontSize:11,color:"#9CA3AF"}}>{p.date} · {p.deliveries?.length||0} order(s)</div></div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontFamily:"'Baloo 2',cursive",fontWeight:800,color:"#06D6A0",fontSize:16}}>{fmt(p.amount)}</div>
-              <button onClick={()=>del(p.id)} style={{background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",marginTop:4}}>🗑️ Undo</button>
-            </div>
-          </div>
-          {p.deliveries?.length>0&&<div style={{fontSize:11,color:"#9CA3AF"}}>{p.deliveries.map(d=>d.recipient_name).join(", ")}</div>}
-        </div>)}
-      </Card>
-    </div>
-  </div>;
-}
-
 // ── STOCK HISTORY ─────────────────────────────────────────────────────────────
 function StockHistory({stockHistory,products,reload}){
   const [filter,setFilter]=useState("");
@@ -1836,7 +1739,7 @@ export default function App(){
   const toggleDark=()=>{const d=!dark;setDark(d);saveDark(d);};
   const [products,setProducts]=useState([]);const [sales,setSales]=useState([]);
   const [expenses,setExpenses]=useState([]);const [purchases,setPurchases]=useState([]);
-  const [cats,setCats]=useState([]);const [stakeholders,setStakeholders]=useState([]);const [users,setUsers]=useState([]);const [deliveries,setDeliveries]=useState([]);const [pendingOrders,setPendingOrders]=useState([]);const [deliveryStats,setDeliveryStats]=useState([]);const [payouts,setPayouts]=useState([]);const [stockHistory,setStockHistory]=useState([]);
+  const [cats,setCats]=useState([]);const [stakeholders,setStakeholders]=useState([]);const [users,setUsers]=useState([]);const [deliveries,setDeliveries]=useState([]);const [pendingOrders,setPendingOrders]=useState([]);const [deliveryStats,setDeliveryStats]=useState([]);const [stockHistory,setStockHistory]=useState([]);
   const [tab,setTab]=useState(()=>{const u=loadSession();return u?(ROLE_PERMS[u.role]||ROLE_PERMS.Staff).tabs[0]:"dashboard"});
   const [toast,setToast]=useState(null);const [menuOpen,setMenuOpen]=useState(false);
   const t=msg=>setToast(msg);
@@ -1845,16 +1748,16 @@ export default function App(){
 
   const loadAll=useCallback(async()=>{
     const safe=(p)=>p.catch(e=>{console.warn("Fetch failed:",e.message);return null;});
-    const [p,s,e,pu,c,sh,u,dv,ds,po,sth,pord]=await Promise.all([
+    const [p,s,e,pu,c,sh,u,dv,ds,sth,pord]=await Promise.all([
       safe(API.getProducts()),safe(API.getSales()),safe(API.getExpenses()),
       safe(API.getPurchases()),safe(API.getCategories()),safe(API.getStakeholders()),
       safe(API.getUsers()),safe(API.getDeliveries()),safe(API.getDeliveryStats()),
-      safe(API.getPayouts()),safe(API.getStockHistory()),safe(API.getPendingOrders())
+      safe(API.getStockHistory()),safe(API.getPendingOrders())
     ]);
     if(p)setProducts(p);if(s)setSales(s);if(e)setExpenses(e);
     if(pu)setPurchases(pu);if(c)setCats(c);if(sh)setStakeholders(sh);
     if(u)setUsers(u);if(dv)setDeliveries(dv);if(ds)setDeliveryStats(ds);
-    if(po)setPayouts(po);if(sth)setStockHistory(sth);if(pord)setPendingOrders(pord);
+    if(sth)setStockHistory(sth);if(pord)setPendingOrders(pord);
   },[]);
 
   // Load data on login, retry if fails
@@ -1899,7 +1802,6 @@ export default function App(){
     {id:"stakeholders",label:"Stakeholders",icon:"🤝"},
     {id:"users",label:"Users",icon:"👥"},
     {id:"deliveries",label:"Deliveries",icon:"🛵"},
-    {id:"payouts",label:"Payouts",icon:"💳"},
     {id:"stock-history",label:"Stock Log",icon:"📋"},
     {id:"woocommerce",label:"WooCommerce",icon:"🛒"},
     {id:"preorders",label:"Pre-Orders",icon:"📋"},
@@ -1956,7 +1858,6 @@ export default function App(){
       {at==="preorders"&&<PreOrders toast={t}/>}
       {at==="orders"&&<Orders sales={sales} deliveries={deliveries} pendingOrders={pendingOrders} products={products} reload={loadAll} toast={t}/>}
       {at==="fb-orders"&&<FBOrders sales={sales} toast={t}/>}
-      {at==="payouts"&&<Payouts payouts={payouts} deliveries={deliveries} reload={loadAll} toast={t}/>}
       {at==="stock-history"&&<StockHistory stockHistory={stockHistory} products={products} reload={loadAll}/>}
     </div>
 
