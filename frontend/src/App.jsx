@@ -762,6 +762,7 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
   const colors=["#FF6B35","#06D6A0","#8B5CF6","#3B82F6","#F59E0B","#EF476F"];
   const totalInvested=stakeholders.reduce((a,s)=>a+((s.transactions||[]).filter(t=>t.type==="investment").reduce((x,t)=>x+t.amount,0)),0);
   const totalShares=stakeholders.reduce((a,s)=>a+(s.share_pct||0),0);
+  const maxLoan=Math.max(1,...stakeholders.map(s=>(s.transactions||[]).filter(t=>t.type==="loan").reduce((a,t)=>a+t.amount,0)));
   return <div style={{display:"flex",flexDirection:"column",gap:16}}>
     <div className="grid4">
       <SC icon="👥" label="Stakeholders" value={stakeholders.length} accent="#8B5CF6"/>
@@ -786,6 +787,7 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
       const invested=(s.transactions||[]).filter(t=>t.type==="investment").reduce((a,t)=>a+t.amount,0);
       const withdrawn=(s.transactions||[]).filter(t=>t.type==="withdrawal").reduce((a,t)=>a+t.amount,0);
       const profitReceived=(s.transactions||[]).filter(t=>t.type==="profit_received").reduce((a,t)=>a+t.amount,0);
+      const loan=(s.transactions||[]).filter(t=>t.type==="loan").reduce((a,t)=>a+t.amount,0);
       const monthlyProfit={};
       (s.transactions||[]).filter(t=>t.type==="profit_received").forEach(t=>{
         const m=t.date?.slice(0,7);
@@ -807,6 +809,13 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
           {[["💰 Invested",fmt(invested),"#3B82F6"],["💸 Withdrawn",fmt(withdrawn),"#EF476F"],["💵 Profit Received",fmt(profitReceived),"#06D6A0"]].map(([l,v,c])=>
             <div key={l} style={{background:"#FFF8F0",borderRadius:9,padding:"10px 12px",border:"1px solid #F0E6D3",textAlign:"center"}}><div style={{fontSize:9,color:"#9CA3AF",fontWeight:700,marginBottom:2}}>{l}</div><div style={{fontFamily:"'Baloo 2',cursive",fontSize:15,fontWeight:800,color:c}}>{v}</div></div>)}
         </div>
+        {loan>0&&<div style={{marginBottom:12,padding:"10px 14px",background:"#FFFBEB",borderRadius:9,border:"1px solid #FDE68A"}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,marginBottom:6}}>
+            <span style={{color:"#92400E"}}>🏦 Loan</span>
+            <span style={{fontFamily:"'Baloo 2',cursive",color:"#F59E0B",fontSize:15}}>{fmt(loan)}</span>
+          </div>
+          <Bar value={loan} max={maxLoan} color="#F59E0B"/>
+        </div>}
         {monthlyRows.length>0&&<div style={{marginBottom:14,background:"#F0FDF4",borderRadius:10,padding:"10px 14px",border:"1px solid #BBF7D0"}}>
           <div style={{fontSize:10,fontWeight:800,color:"#065F46",textTransform:"uppercase",marginBottom:8}}>💵 Monthly Profit Received</div>
           <div style={{display:"flex",flexDirection:"column",gap:5}}>
