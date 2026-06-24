@@ -105,6 +105,8 @@ async function initDB() {
   // Add phone and address columns if not exist
   try { await q("ALTER TABLE sales ADD COLUMN phone VARCHAR(50) DEFAULT ''"); } catch(e) {}
   try { await q("ALTER TABLE sales ADD COLUMN address TEXT"); } catch(e) {}
+  try { await q("ALTER TABLE pending_orders ADD COLUMN product_id INT DEFAULT NULL"); } catch(e) {}
+  try { await q("ALTER TABLE pending_orders ADD COLUMN qty INT DEFAULT 1"); } catch(e) {}
 
   await q(`CREATE TABLE IF NOT EXISTS expenses (
     id         INT AUTO_INCREMENT PRIMARY KEY,
@@ -796,12 +798,21 @@ app.get("/api/payouts/unpaid", async (req, res) => {
 
 // ── PUBLIC ORDER FORM ─────────────────────────────────────────────────────────
 // Saves to pending_orders — awaits approval before Pathao is created
+// Public product list for the order form (only in-stock items)
+app.get("/api/products/public", async (_, res) => {
+  try {
+    const [rows] = await q("SELECT id, name, emoji, sell, stock FROM products WHERE stock > 0 ORDER BY name");
+    res.json(rows.map(r => ({ ...r, sell: +r.sell, stock: +r.stock })));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/orders/public", async (req, res) => {
   try {
     const customer_name    = req.body.customer_name    || "";
     const customer_phone   = req.body.customer_phone   || "";
     const customer_address = req.body.customer_address || "";
-    const product_name     = req.body.product_name     || "Order";
+    const product_id       = req.body.product_id ? +req.body.product_id : null;
+    const qty              = parseInt(req.body.qty) || 1;
     const sell_price       = parseFloat(req.body.sell_price)      || 0;
     const delivery_type    = req.body.delivery_type               || "inside";
     const delivery_charge  = parseFloat(req.body.delivery_charge) || 80;
@@ -809,9 +820,16 @@ app.post("/api/orders/public", async (req, res) => {
     const notes            = req.body.notes || "";
     const inv              = "ORD-" + Date.now().toString().slice(-6);
 
+    // Resolve product name from DB if product_id provided
+    let product_name = req.body.product_name || "Order";
+    if (product_id) {
+      const [[prod]] = await q("SELECT name FROM products WHERE id=?", [product_id]);
+      if (prod) product_name = prod.name;
+    }
+
     await q(
-      "INSERT INTO pending_orders (inv,customer_name,customer_phone,customer_address,product_details,product_price,delivery_type,delivery_charge,total,notes,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-      [inv, customer_name, customer_phone, customer_address, product_name, sell_price, delivery_type, delivery_charge, total, notes, "pending"]
+      "INSERT INTO pending_orders (inv,customer_name,customer_phone,customer_address,product_details,product_price,delivery_type,delivery_charge,total,notes,status,product_id,qty) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [inv, customer_name, customer_phone, customer_address, product_name, sell_price, delivery_type, delivery_charge, total, notes, "pending", product_id, qty]
     );
 
     res.json({ ok: true, inv, customer_name, total });
@@ -844,14 +862,30 @@ app.post("/api/pending-orders/:id/approve", async (req, res) => {
     const today           = new Date().toISOString().split("T")[0];
     const timeNow         = new Date().toLocaleTimeString("en-BD", {hour:"2-digit", minute:"2-digit"});
 
+    // Use product_id from manager override, or fall back to what customer selected on the form
+    const product_id = req.body.product_id ? +req.body.product_id : (po.product_id ? +po.product_id : null);
+    const order_qty  = po.qty ? +po.qty : 1;
+    let buy_price = 0, sale_emoji = "🛒";
+    if (product_id) {
+      const [[prod]] = await q("SELECT buy, emoji FROM products WHERE id=?", [product_id]);
+      if (prod) { buy_price = +prod.buy; sale_emoji = prod.emoji || "🛒"; }
+    }
+    const profit = final_price - buy_price;
+
     // Create sale
     const [saleRow] = await q(
       "INSERT INTO sales (inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,phone,address,payment,sold_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      [po.inv, today, timeNow, null, po.product_details||"Order", "🛒",
-       1, final_price, 0, final_price, final_price,
+      [po.inv, today, timeNow, product_id, po.product_details||"Order", sale_emoji,
+       order_qty, final_price, buy_price, final_price, profit,
        po.customer_name, po.customer_phone, po.customer_address,
        "Cash on delivery (COD)", "Order Form"]
     );
+
+    // Deduct stock if a product was linked
+    if (product_id) {
+      await q("UPDATE products SET stock = stock - ? WHERE id = ?", [order_qty, product_id]);
+      await logStockChange(product_id, -order_qty, "sale", po.inv, "Order Form");
+    }
 
     // Create Pathao
     let consignment_id = null, pathao_status = "Pending";

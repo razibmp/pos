@@ -23,6 +23,17 @@ textarea{resize:vertical;min-height:80px}
 .delivery-option.selected{border-color:#FF6B35;background:#FFF3ED}
 .delivery-option .charge{font-family:'Baloo 2',cursive;font-size:20px;font-weight:800;color:#FF6B35}
 .delivery-option .dlabel{font-size:11px;color:#6B7280;font-weight:700;margin-top:2px}
+.product-card{border:1.5px solid #F0D9C0;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;transition:all .2s;margin-bottom:6px}
+.product-card.selected{border-color:#FF6B35;background:#FFF3ED}
+.product-card .emoji{font-size:24px;flex-shrink:0}
+.product-card .info{flex:1;min-width:0}
+.product-card .pname{font-weight:800;font-size:13px;color:#1A1A2E}
+.product-card .pstock{font-size:11px;color:#9CA3AF;margin-top:1px}
+.product-card .pprice{font-family:'Baloo 2',cursive;font-size:16px;font-weight:800;color:#FF6B35;flex-shrink:0}
+.qty-row{display:flex;align-items:center;gap:10px;margin-top:10px}
+.qty-btn{width:36px;height:36px;border:1.5px solid #F0D9C0;border-radius:8px;background:#FFFAF7;font-size:18px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#1A1A2E;flex-shrink:0;transition:all .2s}
+.qty-btn:hover{border-color:#FF6B35;background:#FFF3ED}
+.qty-val{font-family:'Baloo 2',cursive;font-size:18px;font-weight:800;color:#1A1A2E;min-width:32px;text-align:center}
 .summary{background:#FFF8F0;border-radius:12px;padding:14px;margin:16px 0;border:1.5px solid #F0D9C0}
 .summary-row{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;font-weight:700;color:#6B7280}
 .summary-total{display:flex;justify-content:space-between;font-family:'Baloo 2',cursive;font-size:20px;font-weight:800;color:#FF6B35;border-top:1.5px dashed #F0D9C0;padding-top:10px;margin-top:6px}
@@ -37,6 +48,9 @@ textarea{resize:vertical;min-height:80px}
 .tracking-box .tlabel{font-size:10px;font-weight:800;color:#9CA3AF;text-transform:uppercase;margin-bottom:2px}
 .tracking-box .tvalue{font-family:'Baloo 2',cursive;font-size:17px;font-weight:800;color:#FF6B35;margin-bottom:10px}
 .note{font-size:11px;color:#9CA3AF;text-align:center;margin-top:8px;line-height:1.5}
+.loading-products{text-align:center;color:#9CA3AF;font-size:13px;padding:16px 0}
+.search-box{width:100%;border:1.5px solid #F0D9C0;border-radius:10px;padding:10px 14px;font-family:'Nunito',sans-serif;font-size:13px;color:#1A1A2E;background:#FFFAF7;outline:none;margin-bottom:10px}
+.search-box:focus{border-color:#FF6B35}
 </style>
 </head>
 <body>
@@ -65,15 +79,19 @@ textarea{resize:vertical;min-height:80px}
     </div>
 
     <div class="field">
-      <label>Product Details *</label>
-      <textarea id="productDetails" placeholder="e.g. F1 Mercedes 1:43 Scale Model × 1&#10;Bburago Ferrari SF-25 1:64 × 2" style="min-height:100px"></textarea>
-      <div style="font-size:11px;color:#9CA3AF;margin-top:4px">Write product name and quantity. You can order multiple items.</div>
+      <label>Select Product *</label>
+      <input type="text" class="search-box" id="productSearch" placeholder="🔍 Search products..." oninput="filterProducts()" style="margin-bottom:10px"/>
+      <div id="productList"><div class="loading-products">⏳ Loading products...</div></div>
     </div>
 
-    <div class="field">
-      <label>Product Price (৳) *</label>
-      <input type="number" id="productPrice" placeholder="e.g. 2800" oninput="updateTotal()"/>
-      <div style="font-size:11px;color:#9CA3AF;margin-top:4px">Enter the agreed product price</div>
+    <div class="field" id="qtyField" style="display:none">
+      <label>Quantity</label>
+      <div class="qty-row">
+        <button class="qty-btn" onclick="changeQty(-1)">−</button>
+        <div class="qty-val" id="qtyVal">1</div>
+        <button class="qty-btn" onclick="changeQty(1)">+</button>
+        <div style="font-size:12px;color:#9CA3AF;font-weight:700;margin-left:4px">× <span id="selectedPriceLbl">৳0</span> each</div>
+      </div>
     </div>
 
     <div class="field">
@@ -109,6 +127,66 @@ textarea{resize:vertical;min-height:80px}
 
 <script>
 let deliveryType = 'inside';
+let qty = 1;
+let selectedProduct = null;
+let allProducts = [];
+
+// Load products on page load
+(async function loadProducts() {
+  try {
+    const res = await fetch('/api/products/public');
+    allProducts = await res.json();
+    renderProducts(allProducts);
+  } catch(e) {
+    document.getElementById('productList').innerHTML = '<div class="loading-products">⚠️ Could not load products. Please call 01839000021.</div>';
+  }
+})();
+
+function filterProducts() {
+  const q = document.getElementById('productSearch').value.toLowerCase();
+  const filtered = q ? allProducts.filter(p => p.name.toLowerCase().includes(q)) : allProducts;
+  renderProducts(filtered);
+}
+
+function renderProducts(list) {
+  const el = document.getElementById('productList');
+  if (list.length === 0) {
+    el.innerHTML = '<div class="loading-products">No products found</div>';
+    return;
+  }
+  el.innerHTML = list.map(p => `
+    <div class="product-card ${selectedProduct && selectedProduct.id === p.id ? 'selected' : ''}" onclick="selectProduct(${p.id})">
+      <div class="emoji">${p.emoji || '🎮'}</div>
+      <div class="info">
+        <div class="pname">${p.name}</div>
+        <div class="pstock">Stock: ${p.stock} available</div>
+      </div>
+      <div class="pprice">৳${Number(p.sell).toLocaleString('en-IN')}</div>
+    </div>
+  `).join('');
+}
+
+function selectProduct(id) {
+  selectedProduct = allProducts.find(p => p.id === id);
+  qty = 1;
+  document.getElementById('qtyVal').textContent = '1';
+  document.getElementById('qtyField').style.display = selectedProduct ? 'block' : 'none';
+  if (selectedProduct) {
+    document.getElementById('selectedPriceLbl').textContent = '৳' + Number(selectedProduct.sell).toLocaleString('en-IN');
+  }
+  renderProducts(allProducts.filter(p => {
+    const q = document.getElementById('productSearch').value.toLowerCase();
+    return !q || p.name.toLowerCase().includes(q);
+  }));
+  updateTotal();
+}
+
+function changeQty(delta) {
+  if (!selectedProduct) return;
+  qty = Math.max(1, Math.min(selectedProduct.stock, qty + delta));
+  document.getElementById('qtyVal').textContent = qty;
+  updateTotal();
+}
 
 function selectDelivery(type) {
   deliveryType = type;
@@ -119,18 +197,17 @@ function selectDelivery(type) {
 
 function updateTotal() {
   const charge = deliveryType === 'outside' ? 150 : 80;
-  const price  = parseFloat(document.getElementById('productPrice')?.value || 0) || 0;
+  const price  = selectedProduct ? selectedProduct.sell * qty : 0;
   const total  = price + charge;
-  document.getElementById('s-price').textContent   = '৳' + price.toLocaleString('en-IN');
-  document.getElementById('s-delivery').textContent = '৳' + charge;
-  document.getElementById('s-total').textContent    = '৳' + total.toLocaleString('en-IN');
+  document.getElementById('s-price').textContent    = '৳' + price.toLocaleString('en-IN');
+  document.getElementById('s-delivery').textContent  = '৳' + charge;
+  document.getElementById('s-total').textContent     = '৳' + total.toLocaleString('en-IN');
 }
 
 async function submitOrder() {
   const name    = document.getElementById('customerName').value.trim();
   const phone   = document.getElementById('customerPhone').value.trim();
   const address = document.getElementById('customerAddress').value.trim();
-  const product = document.getElementById('productDetails').value.trim();
   const notes   = document.getElementById('instructions').value.trim();
   const errEl   = document.getElementById('errorMsg');
 
@@ -139,9 +216,7 @@ async function submitOrder() {
   if (!name)    { showError('Please enter your name'); return; }
   if (!phone || phone.length < 10) { showError('Please enter a valid phone number'); return; }
   if (!address) { showError('Please enter your delivery address'); return; }
-  if (!product) { showError('Please describe the product you want'); return; }
-  const price = parseFloat(document.getElementById('productPrice').value || 0) || 0;
-  if (!price) { showError('Please enter the product price'); return; }
+  if (!selectedProduct) { showError('Please select a product'); return; }
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -149,8 +224,9 @@ async function submitOrder() {
 
   try {
     const charge = deliveryType === 'outside' ? 150 : 80;
-    const price  = parseFloat(document.getElementById('productPrice').value || 0) || 0;
+    const price  = selectedProduct.sell * qty;
     const total  = price + charge;
+
     const res = await fetch('/api/orders/public', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -158,12 +234,10 @@ async function submitOrder() {
         customer_name   : name,
         customer_phone  : phone,
         customer_address: address,
-        product_name    : product,
-        product_emoji   : '🛒',
-        qty             : 1,
+        product_name    : selectedProduct.name,
+        product_id      : selectedProduct.id,
+        qty             : qty,
         sell_price      : price,
-        buy_price       : 0,
-        product_total   : price,
         delivery_type   : deliveryType,
         delivery_charge : charge,
         total,
@@ -173,7 +247,7 @@ async function submitOrder() {
 
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Order failed');
-    showSuccess(data, charge);
+    showSuccess(data, charge, price);
   } catch(e) {
     showError(e.message);
     btn.disabled = false;
@@ -187,7 +261,7 @@ function showError(msg) {
   el.style.display = 'block';
 }
 
-function showSuccess(data, charge) {
+function showSuccess(data, charge, price) {
   document.getElementById('mainCard').innerHTML = `
     <div class="success">
       <div class="icon">✅</div>
@@ -197,9 +271,8 @@ function showSuccess(data, charge) {
       <div class="tracking-box">
         <div class="tlabel">Order Number</div>
         <div class="tvalue">${data.inv}</div>
-        ${data.consignment_id ? '<div class="tlabel">Pathao Tracking</div><div class="tvalue">'+data.consignment_id+'</div>' : ''}
         <div class="tlabel">Product Price</div>
-        <div class="tvalue">৳${(data.total - charge).toLocaleString('en-IN')}</div>
+        <div class="tvalue">৳${Number(price).toLocaleString('en-IN')}</div>
         <div class="tlabel">Delivery Charge</div>
         <div class="tvalue">৳${charge}</div>
         <div class="tlabel">Total COD Amount</div>

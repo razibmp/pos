@@ -1520,16 +1520,18 @@ function PreOrders({toast}){
 
 
 // ── ORDERS TAB ────────────────────────────────────────────────────────────────
-function Orders({sales,deliveries,pendingOrders,reload,toast}){
+function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
   const [approving,setApproving]=useState(null);
   const [finalPrices,setFinalPrices]=useState({});
+  const [selectedProducts,setSelectedProducts]=useState({});
 
   const approvePending=async(id)=>{
     const fp=finalPrices[id];
     if(!fp){toast("❌ Enter final product price first!");return;}
     setApproving(id);
     try{
-      const r=await API.approveOrder(id,{final_price:+fp});
+      const product_id=selectedProducts[id]?+selectedProducts[id]:null;
+      const r=await API.approveOrder(id,{final_price:+fp,product_id});
       toast("✅ Approved! Pathao: "+(r.consignment_id||"pending"));
       reload();
     }catch(e){toast("❌ "+e.message);}
@@ -1626,8 +1628,17 @@ function Orders({sales,deliveries,pendingOrders,reload,toast}){
                 style={{width:"100%",border:"1.5px solid #F59E0B",borderRadius:8,padding:"8px 10px",fontFamily:"'Nunito',sans-serif",fontSize:14,fontWeight:700,outline:"none",background:"#FFFBEB"}}
                 placeholder="Enter final price"/>
             </div>
+            <div style={{flex:"1 1 160px"}}>
+              <label style={{fontSize:9,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",display:"block",marginBottom:4}}>Link Inventory Item (deducts stock)</label>
+              <select value={selectedProducts[o.id]||""} onChange={e=>setSelectedProducts(p=>({...p,[o.id]:e.target.value}))}
+                style={{width:"100%",border:"1.5px solid #F0D9C0",borderRadius:8,padding:"8px 10px",fontFamily:"'Nunito',sans-serif",fontSize:13,outline:"none",background:"#FFFAF7"}}>
+                <option value="">— No deduction —</option>
+                {products.map(p=><option key={p.id} value={p.id}>{p.emoji} {p.name} (stock: {p.stock}, buy: ৳{p.buy})</option>)}
+              </select>
+            </div>
             {finalPrices[o.id]&&<div style={{background:"#FFF8F0",borderRadius:8,padding:"8px 12px",fontSize:13,fontWeight:800,color:"#FF6B35",flexShrink:0}}>
               Total COD: {fmt((+finalPrices[o.id]||0)+(+o.delivery_charge||80))}
+              {selectedProducts[o.id]&&(()=>{const p=products.find(p=>p.id===+selectedProducts[o.id]);return p?<div style={{fontSize:10,color:"#06D6A0",fontWeight:700,marginTop:2}}>Profit: {fmt((+finalPrices[o.id]||0)-p.buy)}</div>:null;})()}
             </div>}
             <button onClick={()=>approvePending(o.id)} disabled={approving===o.id} style={{background:"linear-gradient(135deg,#06D6A0,#10B981)",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontFamily:"'Baloo 2',cursive",fontSize:13,fontWeight:800,cursor:"pointer",flexShrink:0,opacity:approving===o.id?.6:1}}>
               {approving===o.id?"⏳ Creating...":"✅ Approve & Send Pathao"}
@@ -1921,7 +1932,7 @@ export default function App(){
       {at==="settings"&&<Settings toast={t}/>}
       {at==="woocommerce"&&<WooCommerce toast={t}/>}
       {at==="preorders"&&<PreOrders toast={t}/>}
-      {at==="orders"&&<Orders sales={sales} deliveries={deliveries} pendingOrders={pendingOrders} reload={loadAll} toast={t}/>}
+      {at==="orders"&&<Orders sales={sales} deliveries={deliveries} pendingOrders={pendingOrders} products={products} reload={loadAll} toast={t}/>}
       {at==="fb-orders"&&<FBOrders sales={sales} toast={t}/>}
       {at==="payouts"&&<Payouts payouts={payouts} deliveries={deliveries} reload={loadAll} toast={t}/>}
       {at==="stock-history"&&<StockHistory stockHistory={stockHistory} products={products} reload={loadAll}/>}
