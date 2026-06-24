@@ -750,23 +750,21 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
   const totalGP=sales.reduce((a,s)=>a+s.profit,0);
   const totalExp=expenses.reduce((a,e)=>a+e.amount,0);
   const netProfit=totalGP-totalExp;
-  const blank={name:"",emoji:"👤",share_pct:"",note:""};
+  const blank={name:"",emoji:"👤",note:""};
   const [form,setForm]=useState(blank);const ff=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
   const [showTx,setShowTx]=useState(null);
   const [txForm,setTxForm]=useState({type:"investment",amount:"",date:todayStr(),note:""});
-  const add=async()=>{if(!form.name.trim()||!form.share_pct){toast("❌ Fill fields!");return;}await API.addStakeholder({name:form.name.trim(),emoji:form.emoji||"👤",share_pct:+form.share_pct,note:form.note||""});setForm(blank);reload();toast("✅ Added!")};
+  const add=async()=>{if(!form.name.trim()){toast("❌ Enter name!");return;}await API.addStakeholder({name:form.name.trim(),emoji:form.emoji||"👤",share_pct:0,note:form.note||""});setForm(blank);reload();toast("✅ Added!")};
   const del=async id=>{if(!window.confirm("Delete stakeholder?"))return;await API.deleteStakeholder(id);reload();toast("🗑️ Deleted")};
   const addTx=async(sid)=>{if(!txForm.amount){toast("❌ Enter amount!");return;}await API.addTransaction(sid,{type:txForm.type,amount:+txForm.amount,date:txForm.date,note:txForm.note||""});setTxForm({type:"investment",amount:"",date:todayStr(),note:""});reload();toast("✅ Recorded!")};
   const delTx=async id=>{await API.deleteTransaction(id);reload();toast("🗑️ Deleted")};
   const TX_TYPES={investment:{label:"Investment",color:"#3B82F6",icon:"💰"},withdrawal:{label:"Withdrawal",color:"#EF476F",icon:"💸"},profit_received:{label:"Profit Received",color:"#06D6A0",icon:"💵"},loan:{label:"Loan",color:"#F59E0B",icon:"🏦"}};
   const colors=["#FF6B35","#06D6A0","#8B5CF6","#3B82F6","#F59E0B","#EF476F"];
   const totalInvested=stakeholders.reduce((a,s)=>a+((s.transactions||[]).filter(t=>t.type==="investment").reduce((x,t)=>x+t.amount,0)),0);
-  const totalShares=stakeholders.reduce((a,s)=>a+(s.share_pct||0),0);
   const maxLoan=Math.max(1,...stakeholders.map(s=>(s.transactions||[]).filter(t=>t.type==="loan").reduce((a,t)=>a+t.amount,0)));
   return <div style={{display:"flex",flexDirection:"column",gap:16}}>
-    <div className="grid4">
+    <div className="grid3">
       <SC icon="👥" label="Stakeholders" value={stakeholders.length} accent="#8B5CF6"/>
-      <SC icon="📊" label="Shares" value={totalShares+"%"} sub={totalShares===100?"✅ Balanced":"⚠️ Check split"} accent={totalShares===100?"#06D6A0":"#EF476F"}/>
       <SC icon="📈" label="Net Profit" value={<span style={{color:netProfit>=0?"#06D6A0":"#EF476F"}}>{fmt(netProfit)}</span>} sub="all time" accent="#06D6A0"/>
       <SC icon="💸" label="Total Invested" value={fmt(totalInvested)} accent="#3B82F6"/>
     </div>
@@ -774,10 +772,7 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
       <CT>➕ Add Stakeholder</CT>
       <div style={{display:"flex",flexDirection:"column",gap:11}}>
         <FI label="Name *" value={form.name} onChange={ff("name")} placeholder="e.g. Razib"/>
-        <div className="grid2" style={{gap:10}}>
-          <FI label="Emoji" value={form.emoji} onChange={ff("emoji")} maxLength={4} placeholder="👤"/>
-          <FI label="Share %" type="number" min="0" max="100" value={form.share_pct} onChange={ff("share_pct")} placeholder="e.g. 40"/>
-        </div>
+        <FI label="Emoji" value={form.emoji} onChange={ff("emoji")} maxLength={4} placeholder="👤"/>
         <FI label="Note" value={form.note} onChange={ff("note")} placeholder="e.g. Founder"/>
       </div>
       <Btn onClick={add} style={{width:"100%",marginTop:12}}>➕ Add</Btn>
@@ -798,7 +793,7 @@ function Stakeholders({stakeholders,sales,expenses,reload,toast}){
         <CT>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:38,height:38,borderRadius:10,background:col+"18",border:"2px solid "+col+"44",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{s.emoji}</div>
-            <div><div style={{fontWeight:800,fontSize:14}}>{s.name} <span style={{color:col,fontFamily:"'Baloo 2',cursive"}}>{s.share_pct}%</span></div><div style={{fontSize:10,color:"#9CA3AF",fontWeight:600}}>{s.note||"Stakeholder"}</div></div>
+            <div><div style={{fontWeight:800,fontSize:14}}>{s.name}</div><div style={{fontSize:10,color:"#9CA3AF",fontWeight:600}}>{s.note||"Stakeholder"}</div></div>
           </div>
           <div style={{display:"flex",gap:7}}>
             <button onClick={()=>setShowTx(showTx===s.id?null:s.id)} style={{background:col+"18",color:col,border:"1.5px solid "+col+"44",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:800,cursor:"pointer"}}>💳 Ledger</button>
