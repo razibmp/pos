@@ -103,7 +103,9 @@ function Login({onLogin}){
     catch(e){setErr(e.message);}
     finally{setLoading(false);}
   };
-  return <div style={{minHeight:"100vh",background:"linear-gradient(145deg,#fff5f0 0%,#f0f4ff 100%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
+  return <div style={{minHeight:"100vh",backgroundImage:"url('https://media.formula1.com/image/upload/t_16by9Centre/c_lfill,w_3392/q_auto/v1740000001/fom-website/2025/Miscellaneous/GettyImages-1322158873.webp')",backgroundSize:"cover",backgroundPosition:"center",backgroundRepeat:"no-repeat",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,position:"relative"}}>
+    <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.52)",backdropFilter:"blur(2px)"}}/>
+    <div style={{position:"relative",zIndex:1,width:"100%",display:"flex",flexDirection:"column",alignItems:"center"}}>
     <style>{css}</style>
     <div style={{width:"100%",maxWidth:400,animation:"su .35s ease"}}>
       {/* Card */}
@@ -125,7 +127,16 @@ function Login({onLogin}){
           </div>
         </div>
       </div>
-      <div style={{textAlign:"center",marginTop:20,fontSize:12,color:"#AEAEB2",fontWeight:500}}>© 2025 The Hobby Center · Internal Use Only</div>
+      <div style={{textAlign:"center",marginTop:22,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+        <div style={{fontSize:12,color:"rgba(255,255,255,.45)",fontWeight:500,letterSpacing:".01em"}}>© 2026 · Internal Use Only</div>
+        <div style={{fontSize:13,color:"rgba(255,255,255,.55)",fontWeight:500,letterSpacing:".01em"}}>
+          Made with <span style={{color:"#EF476F",fontSize:14}}>❤️</span> by{" "}
+          <span style={{color:"rgba(255,255,255,.4)",fontWeight:400}}>{"{ "}</span>
+          <span style={{color:"#FF6B35",fontWeight:700}}>The Hobby Center</span>
+          <span style={{color:"rgba(255,255,255,.4)",fontWeight:400}}>{" }"}</span>
+        </div>
+      </div>
+    </div>
     </div>
   </div>;
 }
