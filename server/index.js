@@ -9,8 +9,8 @@ const nodemailer = require("nodemailer");
 const cron       = require("node-cron");
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(cors({ origin: false }));
+app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 // Serve public order form
@@ -345,15 +345,29 @@ async function logStockChange(product_id, change_qty, reason, ref="", changed_by
   } catch(e) { console.error("Stock log error:", e.message); }
 }
 
+// ── LOGIN RATE LIMITER ────────────────────────────────────────────────────────
+const _loginAttempts = new Map();
+function loginRateCheck(ip) {
+  const now = Date.now();
+  let e = _loginAttempts.get(ip) || { n: 0, reset: now + 15 * 60 * 1000 };
+  if (now > e.reset) { e.n = 0; e.reset = now + 15 * 60 * 1000; }
+  e.n++;
+  _loginAttempts.set(ip, e);
+  return e.n > 10;
+}
+
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 app.post("/api/login", async (req, res) => {
   try {
+    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
+    if (loginRateCheck(ip)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
     const { username, password } = req.body;
-    const [[user]] = await q("SELECT * FROM users WHERE username = ?", [username?.toLowerCase()?.trim()]);
+    if (!username || !password) return res.status(400).json({ error: "Username and password required" });
+    const [[user]] = await q("SELECT * FROM users WHERE username = ?", [username.toLowerCase().trim()]);
     if (!user || !bcrypt.compareSync(password, user.password))
       return res.status(401).json({ error: "Invalid username or password" });
     res.json({ id: user.id, username: user.username, name: user.name, role: user.role, emoji: user.emoji });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+  } catch(e) { res.status(500).json({ error: "Login failed" }); }
 });
 
 // ── USERS ────────────────────────────────────────────────────────────────────
@@ -526,10 +540,11 @@ app.put("/api/purchases/:id/status", async (req, res) => {
     const [items] = await q("SELECT * FROM purchase_items WHERE purchase_id=?", [req.params.id]);
     if (po && items.length > 0)
       for (const item of items)
-        if (item.product_id)
+        if (item.product_id) {
           await q("UPDATE products SET stock = stock + ?, buy = ? WHERE id = ?",
             [item.qty, Math.round(po.cost_per_unit), item.product_id]);
           await logStockChange(item.product_id, item.qty, "purchase_received", `PO-${req.params.id}`, "");
+        }
   }
   res.json({ ok: true });
 });
@@ -614,14 +629,14 @@ app.post("/api/deliveries", async (req, res) => {
     const today = new Date().toISOString().split("T")[0];
     const timeNow = new Date().toLocaleTimeString("en-BD",{hour:"2-digit",minute:"2-digit"});
 
+    // Auto-create a sale record — total = product price only, delivery charge excluded
+    const inv = d.merchant_order_id || ("THC-"+Date.now().toString().slice(-6));
+
     // Deduct stock if product_id is provided
     if (d.product_id) {
       await q("UPDATE products SET stock = stock - ? WHERE id = ?", [d.item_quantity||1, d.product_id]);
       await logStockChange(d.product_id, -(d.item_quantity||1), "pathao_delivery", inv, d.created_by||"");
     }
-
-    // Auto-create a sale record — total = product price only, delivery charge excluded
-    const inv = d.merchant_order_id || ("THC-"+Date.now().toString().slice(-6));
     const [saleRow] = await q(
       `INSERT INTO sales (inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,payment,sold_by)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -1553,51 +1568,6 @@ cron.schedule("0 2 * * *", async () => {
   catch(e) { console.error("Daily report failed:", e.message); }
 });
 
-// Manual trigger endpoint (for testing)
-app.get("/api/send-report", async (req, res) => {
-  try {
-    await sendDailyReport();
-    res.json({ ok: true, message: "Report sent!" });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-
-// Debug endpoint to test Google Sheet fetch
-app.get("/api/preorders/debug", async (req, res) => {
-  try {
-    const https = require("https");
-    const SHEET_ID = "1ZlMpj92NW51KLSNv1CP41HI5ow3VxyOuCT_IXLqrayA";
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=1288345852`;
-
-    const fetchUrl = (reqUrl, redirectCount=0) => {
-      return new Promise((resolve, reject) => {
-        if(redirectCount > 5) return reject(new Error("Too many redirects"));
-        const urlObj = new URL(reqUrl);
-        const options = {
-          hostname: urlObj.hostname,
-          path: urlObj.pathname + urlObj.search,
-          method: "GET",
-          headers: { "User-Agent": "Mozilla/5.0" }
-        };
-        https.get(options, (r) => {
-          let data = "";
-          r.on("data", d => data += d);
-          r.on("end", () => resolve({ status: r.statusCode, headers: r.headers, body: data.substring(0,500) }));
-        }).on("error", reject);
-      });
-    };
-
-    const result = await fetchUrl(url);
-    // If redirect, follow it
-    if([301,302,303,307,308].includes(result.status) && result.headers.location) {
-      const r2 = await fetchUrl(result.headers.location);
-      return res.json({ step1: result.status, redirect_to: result.headers.location, step2_status: r2.status, body_preview: r2.body });
-    }
-    res.json({ status: result.status, body_preview: result.body });
-  } catch(e) {
-    res.json({ error: e.message });
-  }
-});
 
 // ── HEALTH ────────────────────────────────────────────────────────────────────
 app.get("/api/health", async (_, res) => {

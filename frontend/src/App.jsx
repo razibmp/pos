@@ -12,7 +12,7 @@ const EXP_CATS = {
   misc:{label:"Misc",icon:"📋",color:"#6B7280"},
 };
 const ROLE_PERMS = {
-  Owner:  {tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","users","deliveries","stock-history","woocommerce","preorders","orders","settings"],seeFinancials:true},
+  Owner:  {tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","users","deliveries","stock-history","woocommerce","preorders","orders"],seeFinancials:true},
   Manager:{tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","deliveries","stock-history","woocommerce","preorders","orders"],seeFinancials:true},
   Staff:  {tabs:["sales","inventory"],seeFinancials:false},
 };
@@ -22,8 +22,9 @@ const loadSession  = ()  => { try { const s=localStorage.getItem(SESSION_KEY); r
 const clearSession = ()  => { try { localStorage.removeItem(SESSION_KEY); } catch {} };
 
 const css = `
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',Arial,sans-serif;background:#F5F5F7;color:#1D1D1F;-webkit-font-smoothing:antialiased}
+body{font-family:'Inter',sans-serif;background:#F5F5F7;color:#1D1D1F;-webkit-font-smoothing:antialiased}
 @keyframes su{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -102,20 +103,29 @@ function Login({onLogin}){
     catch(e){setErr(e.message);}
     finally{setLoading(false);}
   };
-  return <div style={{minHeight:"100vh",background:"#F5F5F7",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+  return <div style={{minHeight:"100vh",background:"linear-gradient(145deg,#fff5f0 0%,#f0f4ff 100%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
     <style>{css}</style>
-    <div style={{background:"#fff",borderRadius:22,padding:"36px 32px",width:"100%",maxWidth:380,boxShadow:"0 2px 8px rgba(0,0,0,.06),0 16px 48px rgba(0,0,0,.08)",animation:"su .3s ease",border:"1px solid #E5E5EA"}}>
-      <div style={{textAlign:"center",marginBottom:28}}>
-        <div style={{width:64,height:64,borderRadius:"50%",background:"#FF6B35",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,margin:"0 auto 14px"}}>🎮</div>
-        <div style={{fontSize:22,fontWeight:700,color:"#1D1D1F",letterSpacing:"-.03em"}}>The Hobby Center</div>
-        <div style={{fontSize:13,color:"#6E6E73",fontWeight:500,marginTop:4}}>Bangladesh · Dashboard</div>
+    <div style={{width:"100%",maxWidth:400,animation:"su .35s ease"}}>
+      {/* Card */}
+      <div style={{background:"#fff",borderRadius:24,overflow:"hidden",boxShadow:"0 4px 6px rgba(0,0,0,.04),0 20px 60px rgba(0,0,0,.1)"}}>
+        {/* Brand header */}
+        <div style={{background:"linear-gradient(135deg,#FF6B35 0%,#FF8C42 100%)",padding:"36px 32px 32px",display:"flex",flexDirection:"column",alignItems:"center"}}>
+          <div style={{width:72,height:72,borderRadius:"50%",background:"rgba(255,255,255,.2)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,.4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,marginBottom:16}}>🎮</div>
+          <div style={{fontSize:22,fontWeight:700,color:"#fff",letterSpacing:"-.02em"}}>The Hobby Center</div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,.75)",fontWeight:500,marginTop:5,letterSpacing:".01em"}}>Management Dashboard · Bangladesh</div>
+        </div>
+        {/* Form */}
+        <div style={{padding:"28px 32px 32px"}}>
+          <div style={{marginBottom:20,fontSize:15,fontWeight:600,color:"#1D1D1F"}}>Sign in to your account</div>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <FI label="Username" value={un} onChange={e=>{setUN(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter username" autoCapitalize="none" autoComplete="username"/>
+            <FI label="Password" type="password" value={pw} onChange={e=>{setPW(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter password" autoComplete="current-password"/>
+            {err&&<div style={{background:"#FEF2F2",color:"#DC2626",borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,textAlign:"center",border:"1px solid #FECACA"}}>⚠️ {err}</div>}
+            <button onClick={submit} disabled={loading} style={{width:"100%",fontSize:15,fontWeight:700,padding:"14px",marginTop:2,borderRadius:12,border:"none",cursor:loading?"not-allowed":"pointer",background:"linear-gradient(135deg,#FF6B35,#FF8C42)",color:"#fff",boxShadow:"0 4px 14px rgba(255,107,53,.35)",opacity:loading?.65:1,transition:"opacity .15s,box-shadow .15s",fontFamily:"inherit",letterSpacing:"-.01em"}}>{loading?"Signing in…":"Sign In"}</button>
+          </div>
+        </div>
       </div>
-      <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        <FI label="Username" value={un} onChange={e=>{setUN(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="e.g. razib" autoCapitalize="none"/>
-        <FI label="Password" type="password" value={pw} onChange={e=>{setPW(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="••••"/>
-        {err&&<div style={{background:"#FFF0EE",color:"#C0392B",borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ {err}</div>}
-        <Btn onClick={submit} style={{width:"100%",fontSize:15,padding:13,marginTop:4,opacity:loading?.6:1,borderRadius:12}}>{loading?"Signing in…":"Sign In"}</Btn>
-      </div>
+      <div style={{textAlign:"center",marginTop:20,fontSize:12,color:"#AEAEB2",fontWeight:500}}>© 2025 The Hobby Center · Internal Use Only</div>
     </div>
   </div>;
 }
@@ -1605,7 +1615,7 @@ function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
           ].map(([label,count,rev,color])=><div key={label} style={{background:"#FFF8F0",borderRadius:10,padding:"12px 14px",border:"1px solid #F0E6D3"}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
               <span style={{fontWeight:700,fontSize:13}}>{label}</span>
-              <span style={{fontFamily:"'Baloo 2',cursive",fontWeight:800,color,fontSize:16}}>{count} orders</span>
+              <span style={{fontFamily:"'Inter',sans-serif",fontWeight:800,color,fontSize:16}}>{count} orders</span>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#9CA3AF"}}>
               <span>Revenue</span><span style={{fontWeight:800,color:"#1A1A2E"}}>{fmt(rev)}</span>
@@ -1800,7 +1810,6 @@ export default function App(){
     {id:"woocommerce",label:"WooCommerce",icon:"🛒"},
     {id:"preorders",label:"Pre-Orders",icon:"📋"},
     {id:"orders",label:"Orders",icon:"📬"},
-    {id:"settings",label:"Settings",icon:"⚙️"},
   ];
   const TABS=ALL_TABS.filter(tb=>perms.tabs.includes(tb.id));
   const at=TABS.find(tb=>tb.id===tab)?tab:TABS[0]?.id;
@@ -1843,7 +1852,7 @@ export default function App(){
       {at==="stakeholders"&&<Stakeholders stakeholders={stakeholders} sales={sales} expenses={expenses} reload={loadAll} toast={t}/>}
       {at==="users"&&<Users users={users} reload={loadAll} currentUser={user} toast={t}/>}
       {at==="deliveries"&&<Deliveries deliveries={deliveries} products={products} sales={sales} reload={loadAll} toast={t}/>}
-      {at==="settings"&&<Settings toast={t}/>}
+
       {at==="woocommerce"&&<WooCommerce toast={t}/>}
       {at==="preorders"&&<PreOrders toast={t}/>}
       {at==="orders"&&<Orders sales={sales} deliveries={deliveries} pendingOrders={pendingOrders} products={products} reload={loadAll} toast={t}/>}

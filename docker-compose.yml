@@ -13,17 +13,16 @@ services:
       - mysql-data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-phcroot2024"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 12
       start_period: 30s
 
   api:
     build:
       context: ./server
     container_name: hc-api
-    ports:
-      - "3001:3001"
+    # Port 3001 intentionally not exposed externally — accessed only via nginx proxy
     environment:
       DB_HOST: mysql
       DB_PORT: 3306
@@ -49,13 +48,13 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 20s
 
   frontend:
     build:
