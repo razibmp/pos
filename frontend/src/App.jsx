@@ -24,7 +24,7 @@ const clearSession = ()  => { try { localStorage.removeItem(SESSION_KEY); } catc
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#F5F5F7;color:#1D1D1F;-webkit-font-smoothing:antialiased}
+body{font-family:'Inter',sans-serif;background:transparent;color:#1D1D1F;-webkit-font-smoothing:antialiased}
 @keyframes su{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -61,10 +61,10 @@ const Toast=({msg,onDone})=>{
   useEffect(()=>{const t=setTimeout(onDone,2800);return()=>clearTimeout(t)},[onDone]);
   return <div style={{position:"fixed",bottom:28,left:"50%",transform:"translateX(-50%)",background:"rgba(29,29,31,.92)",backdropFilter:"blur(12px)",color:"#fff",padding:"11px 22px",borderRadius:20,fontWeight:600,fontSize:13,zIndex:9999,boxShadow:"0 4px 24px rgba(0,0,0,.18)",animation:"su .2s ease",whiteSpace:"nowrap",letterSpacing:"-.01em"}}>{msg}</div>;
 };
-const Card=({children,style})=><div className="card" style={{background:"#fff",borderRadius:18,padding:"18px 20px",boxShadow:"0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.04)",border:"1px solid #E5E5EA",...style}}>{children}</div>;
+const Card=({children,style})=><div className="card" style={{background:"rgba(255,255,255,.93)",borderRadius:18,padding:"18px 20px",boxShadow:"0 1px 3px rgba(0,0,0,.08),0 4px 24px rgba(0,0,0,.12)",border:"1px solid rgba(255,255,255,.6)",...style}}>{children}</div>;
 const CT=({children,action})=><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,gap:8}}><div style={{fontSize:15,fontWeight:700,letterSpacing:"-.02em",color:"#1D1D1F"}}>{children}</div>{action&&<div style={{flexShrink:0}}>{action}</div>}</div>;
 const SC=({icon,label,value,sub,accent="#FF6B35"})=>(
-  <div style={{background:"#fff",borderRadius:16,padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.04)",border:"1px solid #E5E5EA"}}>
+  <div style={{background:"rgba(255,255,255,.93)",borderRadius:16,padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,.08),0 4px 24px rgba(0,0,0,.12)",border:"1px solid rgba(255,255,255,.6)"}}>
     <div style={{width:32,height:32,borderRadius:10,background:accent+"15",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,marginBottom:10}}>{icon}</div>
     <div style={{fontSize:11,fontWeight:600,color:"#6E6E73",marginBottom:4,letterSpacing:"-.01em"}}>{label}</div>
     <div style={{fontSize:22,fontWeight:700,color:"#1D1D1F",lineHeight:1.1,letterSpacing:"-.03em"}}>{value}</div>
@@ -1826,7 +1826,7 @@ export default function App(){
   const at=TABS.find(tb=>tb.id===tab)?tab:TABS[0]?.id;
   const dateStr=new Date().toLocaleDateString("en-BD",{weekday:"short",year:"numeric",month:"short",day:"numeric"});
 
-  return <div style={{minHeight:"100vh"}}>
+  return <div style={{minHeight:"100vh",backgroundImage:"linear-gradient(rgba(0,0,0,.38),rgba(0,0,0,.38)),url('https://cdn-6.motorsport.com/images/mgl/YpbP1a30/s1200/lewis-hamilton-ferrari.webp')",backgroundSize:"cover",backgroundPosition:"center top",backgroundAttachment:"fixed",backgroundRepeat:"no-repeat"}}>
     <style>{css}</style>
 
     {/* HEADER */}
