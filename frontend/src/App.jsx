@@ -36,8 +36,18 @@ button:active{transform:scale(.98)}
 .grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .split31{display:grid;grid-template-columns:3fr 2fr;gap:16px}
-.ovx{overflow-x:auto}
+.ovx{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:13px}
+/* ── app background — fixed on desktop, scroll on mobile (iOS fix) ── */
+.app-bg{
+  min-height:100vh;
+  background-image:linear-gradient(rgba(0,0,0,.38),rgba(0,0,0,.38)),url('https://cdn-6.motorsport.com/images/mgl/YpbP1a30/s1200/lewis-hamilton-ferrari.webp');
+  background-size:cover;background-position:center top;
+  background-attachment:fixed;background-repeat:no-repeat;
+}
+/* ── login card sections ── */
+.login-hd{padding:36px 32px 32px}
+.login-bd{padding:28px 32px 32px}
 @media(max-width:768px){
   .grid2,.grid3,.grid4,.grid5{grid-template-columns:1fr 1fr}
   .split,.split31{grid-template-columns:1fr}
@@ -47,7 +57,12 @@ table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{padding:7px 8px!important}
 }
 @media(max-width:480px){
-  .grid3,.grid4,.grid5{grid-template-columns:1fr 1fr}
+  .app-bg{background-attachment:scroll}
+  .grid2,.grid3,.grid4,.grid5{grid-template-columns:1fr 1fr}
+  .grid3.xs-1,.grid4.xs-1,.grid5.xs-1{grid-template-columns:1fr}
+  .login-hd{padding:26px 20px 22px!important}
+  .login-bd{padding:22px 20px 24px!important}
+  .login-wrap{padding:12px!important}
 }
 @media print{
   .no-print{display:none!important}
@@ -103,22 +118,22 @@ function Login({onLogin}){
     catch(e){setErr(e.message);}
     finally{setLoading(false);}
   };
-  return <div style={{minHeight:"100vh",backgroundImage:"url('https://media.formula1.com/image/upload/t_16by9Centre/c_lfill,w_3392/q_auto/v1740000001/fom-website/2025/Miscellaneous/GettyImages-1322158873.webp')",backgroundSize:"cover",backgroundPosition:"center",backgroundRepeat:"no-repeat",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,position:"relative"}}>
+  return <div style={{minHeight:"100vh",backgroundImage:"url('https://media.formula1.com/image/upload/t_16by9Centre/c_lfill,w_3392/q_auto/v1740000001/fom-website/2025/Miscellaneous/GettyImages-1322158873.webp')",backgroundSize:"cover",backgroundPosition:"center",backgroundRepeat:"no-repeat",backgroundAttachment:"scroll",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px",position:"relative"}}>
     <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.52)",backdropFilter:"blur(2px)"}}/>
     <div style={{position:"relative",zIndex:1,width:"100%",display:"flex",flexDirection:"column",alignItems:"center"}}>
     <style>{css}</style>
-    <div style={{width:"100%",maxWidth:400,animation:"su .35s ease"}}>
+    <div className="login-wrap" style={{width:"100%",maxWidth:400,animation:"su .35s ease",padding:"0 4px"}}>
       {/* Card */}
-      <div style={{background:"#fff",borderRadius:24,overflow:"hidden",boxShadow:"0 4px 6px rgba(0,0,0,.04),0 20px 60px rgba(0,0,0,.1)"}}>
+      <div style={{background:"#fff",borderRadius:20,overflow:"hidden",boxShadow:"0 4px 6px rgba(0,0,0,.04),0 20px 60px rgba(0,0,0,.15)"}}>
         {/* Brand header */}
-        <div style={{background:"linear-gradient(135deg,#FF6B35 0%,#FF8C42 100%)",padding:"36px 32px 32px",display:"flex",flexDirection:"column",alignItems:"center"}}>
-          <div style={{width:72,height:72,borderRadius:"50%",background:"rgba(255,255,255,.2)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,.4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,marginBottom:16}}>🎮</div>
-          <div style={{fontSize:22,fontWeight:700,color:"#fff",letterSpacing:"-.02em"}}>The Hobby Center</div>
-          <div style={{fontSize:13,color:"rgba(255,255,255,.75)",fontWeight:500,marginTop:5,letterSpacing:".01em"}}>Management Dashboard · Bangladesh</div>
+        <div className="login-hd" style={{background:"linear-gradient(135deg,#FF6B35 0%,#FF8C42 100%)",display:"flex",flexDirection:"column",alignItems:"center"}}>
+          <div style={{width:68,height:68,borderRadius:"50%",background:"rgba(255,255,255,.2)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,.4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:34,marginBottom:14}}>🎮</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#fff",letterSpacing:"-.02em",textAlign:"center"}}>The Hobby Center</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.75)",fontWeight:500,marginTop:5,letterSpacing:".01em",textAlign:"center"}}>Management Dashboard · Bangladesh</div>
         </div>
         {/* Form */}
-        <div style={{padding:"28px 32px 32px"}}>
-          <div style={{marginBottom:20,fontSize:15,fontWeight:600,color:"#1D1D1F"}}>Sign in to your account</div>
+        <div className="login-bd" style={{background:"#fff"}}>
+          <div style={{marginBottom:18,fontSize:15,fontWeight:600,color:"#1D1D1F"}}>Sign in to your account</div>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             <FI label="Username" value={un} onChange={e=>{setUN(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter username" autoCapitalize="none" autoComplete="username"/>
             <FI label="Password" type="password" value={pw} onChange={e=>{setPW(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter password" autoComplete="current-password"/>
@@ -127,13 +142,11 @@ function Login({onLogin}){
           </div>
         </div>
       </div>
-      <div style={{textAlign:"center",marginTop:22,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+      <div style={{textAlign:"center",marginTop:20,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
         <div style={{fontSize:12,color:"rgba(255,255,255,.45)",fontWeight:500,letterSpacing:".01em"}}>© 2026 · Internal Use Only</div>
-        <div style={{fontSize:13,color:"rgba(255,255,255,.55)",fontWeight:500,letterSpacing:".01em"}}>
+        <div style={{fontSize:13,color:"rgba(255,255,255,.8)",fontWeight:600,letterSpacing:".01em",textShadow:"0 1px 6px rgba(0,0,0,.6)"}}>
           Made with <span style={{color:"#EF476F",fontSize:14}}>❤️</span> by{" "}
-          <span style={{color:"rgba(255,255,255,.4)",fontWeight:400}}>{"{ "}</span>
-          <span style={{color:"#FF6B35",fontWeight:700}}>The Hobby Center</span>
-          <span style={{color:"rgba(255,255,255,.4)",fontWeight:400}}>{" }"}</span>
+          <span style={{color:"#FF6B35"}}>The Hobby Center</span>
         </div>
       </div>
     </div>
@@ -1826,22 +1839,22 @@ export default function App(){
   const at=TABS.find(tb=>tb.id===tab)?tab:TABS[0]?.id;
   const dateStr=new Date().toLocaleDateString("en-BD",{weekday:"short",year:"numeric",month:"short",day:"numeric"});
 
-  return <div style={{minHeight:"100vh",backgroundImage:"linear-gradient(rgba(0,0,0,.38),rgba(0,0,0,.38)),url('https://cdn-6.motorsport.com/images/mgl/YpbP1a30/s1200/lewis-hamilton-ferrari.webp')",backgroundSize:"cover",backgroundPosition:"center top",backgroundAttachment:"fixed",backgroundRepeat:"no-repeat"}}>
+  return <div className="app-bg">
     <style>{css}</style>
 
     {/* HEADER */}
-    <div style={{background:"#15151E",padding:"0 20px",display:"flex",alignItems:"center",justifyContent:"space-between",height:56,position:"sticky",top:0,zIndex:100,borderBottom:"3px solid #E8002D"}}>
-      <div style={{display:"flex",alignItems:"center",gap:10}}>
-        <div style={{width:32,height:32,borderRadius:8,background:"#E8002D",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>🎮</div>
-        <span style={{fontSize:15,fontWeight:800,color:"#fff",letterSpacing:"-.01em",textTransform:"uppercase"}}>The Hobby Center</span>
+    <div style={{background:"#15151E",padding:"0 12px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,position:"sticky",top:0,zIndex:100,borderBottom:"3px solid #E8002D"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+        <div style={{width:30,height:30,borderRadius:8,background:"#E8002D",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🎮</div>
+        <span style={{fontSize:13,fontWeight:800,color:"#fff",letterSpacing:"-.01em",textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>The Hobby Center</span>
       </div>
-      <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
         <div className="hide-mobile" style={{fontSize:12,color:"rgba(255,255,255,.45)",fontWeight:500}}>{dateStr}</div>
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(255,255,255,.08)",borderRadius:20,padding:"5px 12px 5px 8px",border:"1px solid rgba(255,255,255,.12)"}}>
-          <span style={{fontSize:15}}>{user.emoji}</span>
-          <div className="hide-mobile"><span style={{fontSize:13,fontWeight:600,color:"#fff",letterSpacing:"-.01em"}}>{user.name}</span><span style={{fontSize:11,color:"rgba(255,255,255,.45)",fontWeight:500,marginLeft:5}}> · {user.role}</span></div>
+        <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.08)",borderRadius:20,padding:"5px 10px 5px 8px",border:"1px solid rgba(255,255,255,.12)"}}>
+          <span style={{fontSize:14}}>{user.emoji}</span>
+          <div className="hide-mobile"><span style={{fontSize:12,fontWeight:600,color:"#fff",letterSpacing:"-.01em"}}>{user.name}</span><span style={{fontSize:11,color:"rgba(255,255,255,.45)",fontWeight:500,marginLeft:4}}> · {user.role}</span></div>
         </div>
-        <button onClick={doLogout} style={{background:"#E8002D",color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:700,letterSpacing:".02em",textTransform:"uppercase"}}>Sign Out</button>
+        <button onClick={doLogout} style={{background:"#E8002D",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:700,letterSpacing:".02em",textTransform:"uppercase",flexShrink:0}}>Sign Out</button>
       </div>
     </div>
 
