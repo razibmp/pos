@@ -102,12 +102,11 @@ function Login({onLogin}){
     catch(e){setErr(e.message);}
     finally{setLoading(false);}
   };
-  const USERS=[{un:"razib",name:"Razib",role:"Owner",emoji:"👑"},{un:"fahad",name:"Fahad",role:"Manager",emoji:"🧑‍💼"},{un:"manik",name:"Manik",role:"Staff",emoji:"🧑‍🔧"},{un:"babu",name:"Babu",role:"Staff",emoji:"🧑‍🔧"}];
   return <div style={{minHeight:"100vh",background:"#F5F5F7",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
     <style>{css}</style>
     <div style={{background:"#fff",borderRadius:22,padding:"36px 32px",width:"100%",maxWidth:380,boxShadow:"0 2px 8px rgba(0,0,0,.06),0 16px 48px rgba(0,0,0,.08)",animation:"su .3s ease",border:"1px solid #E5E5EA"}}>
       <div style={{textAlign:"center",marginBottom:28}}>
-        <div style={{width:64,height:64,borderRadius:18,background:"#FF6B35",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,margin:"0 auto 14px"}}>🎮</div>
+        <div style={{width:64,height:64,borderRadius:"50%",background:"#FF6B35",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,margin:"0 auto 14px"}}>🎮</div>
         <div style={{fontSize:22,fontWeight:700,color:"#1D1D1F",letterSpacing:"-.03em"}}>The Hobby Center</div>
         <div style={{fontSize:13,color:"#6E6E73",fontWeight:500,marginTop:4}}>Bangladesh · Dashboard</div>
       </div>
@@ -116,10 +115,6 @@ function Login({onLogin}){
         <FI label="Password" type="password" value={pw} onChange={e=>{setPW(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="••••"/>
         {err&&<div style={{background:"#FFF0EE",color:"#C0392B",borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ {err}</div>}
         <Btn onClick={submit} style={{width:"100%",fontSize:15,padding:13,marginTop:4,opacity:loading?.6:1,borderRadius:12}}>{loading?"Signing in…":"Sign In"}</Btn>
-      </div>
-      <div style={{marginTop:22,paddingTop:18,borderTop:"1px solid #F2F2F7"}}>
-        <div style={{fontSize:11,fontWeight:600,color:"#AEAEB2",textAlign:"center",marginBottom:10,letterSpacing:"-.01em"}}>Quick Login</div>
-        <div className="grid2">{USERS.map(u=><button key={u.un} onClick={()=>{setUN(u.un);setPW("1234");setErr("")}} style={{display:"flex",alignItems:"center",gap:8,background:"#F5F5F7",border:"1px solid #E5E5EA",borderRadius:12,padding:"10px 12px",cursor:"pointer",fontFamily:"inherit"}}><span style={{fontSize:18}}>{u.emoji}</span><div style={{textAlign:"left"}}><div style={{fontWeight:600,fontSize:13,color:"#1D1D1F",letterSpacing:"-.01em"}}>{u.name}</div><div style={{fontSize:11,color:"#6E6E73",fontWeight:500}}>{u.role}</div></div></button>)}</div>
       </div>
     </div>
   </div>;
