@@ -1848,7 +1848,7 @@ export default function App(){
   },[user,loadAll]);
 
   const doLogin=u=>{saveSession(u);setUser(u);const p=ROLE_PERMS[u.role]||ROLE_PERMS.Staff;setTab(p.tabs[0]);setMenuOpen(false)};
-  const doLogout=()=>{clearSession();setUser(null);setTab("dashboard");setMenuOpen(false)};
+  const doLogout=()=>{clearSession();API.clearToken?.();setUser(null);setTab("dashboard");setMenuOpen(false)};
 
   if(!user)return <Login onLogin={doLogin}/>;
 
