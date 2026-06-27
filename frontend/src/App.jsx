@@ -1845,7 +1845,6 @@ export default function App(){
     {/* HEADER */}
     <div style={{background:"#FFFFFF",padding:"0 12px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,position:"sticky",top:0,zIndex:100,borderBottom:"1px solid #E5E7EB",boxShadow:"0 1px 2px rgba(0,0,0,.04)"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-        <div style={{width:30,height:30,borderRadius:8,background:"#F2F2F7",border:"1px solid #E5E7EB",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🎮</div>
         <span style={{fontSize:13,fontWeight:800,color:"#1D1D1F",letterSpacing:"-.01em",textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>The Hobby Center</span>
       </div>
       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
