@@ -5,14 +5,14 @@ services:
     container_name: hc-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: hcroot2024
-      MYSQL_DATABASE: hobbycenter
-      MYSQL_USER: hcuser
-      MYSQL_PASSWORD: hcpass2024
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-phcroot2024"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -26,25 +26,28 @@ services:
     environment:
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_NAME: hobbycenter
-      DB_USER: hcuser
-      DB_PASSWORD: hcpass2024
-      PATHAO_CLIENT_ID: nXe0R0vbxr
-      PATHAO_CLIENT_SECRET: Favehu42u3KP3qsMHkTzWWzLvhH5MUtdplSUwr7k
-      PATHAO_USERNAME: thehobbycenterd@gmail.com
-      PATHAO_PASSWORD: XjNicveN3
-      PATHAO_STORE_ID: "76249"
-      PATHAO_CITY_ID: "1"
-      PATHAO_ZONE_ID: "57"
-      PATHAO_SENDER_NAME: The Hobby Center
-      PATHAO_SENDER_PHONE: "01839000021"
-      PATHAO_SENDER_ADDRESS: Section 12 Block D Road 16 House 52 Pallabi Mirpur Dhaka 1216
-      EMAIL_USER: your_gmail@gmail.com
-      EMAIL_PASS: your_gmail_app_password
-      EMAIL_REPORT_TO: your_report_email@gmail.com
-      WC_URL: https://hobbycenterbd.com
-      WC_KEY: ck_519a83df91ea4df972f9505ae92d75e615ba6530
-      WC_SECRET: cs_9422cddb57db36a12a01fd2601ad2a906f8ef183
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      AUTH_SECRET: ${AUTH_SECRET}
+      PATHAO_CLIENT_ID: ${PATHAO_CLIENT_ID}
+      PATHAO_CLIENT_SECRET: ${PATHAO_CLIENT_SECRET}
+      PATHAO_USERNAME: ${PATHAO_USERNAME}
+      PATHAO_PASSWORD: ${PATHAO_PASSWORD}
+      PATHAO_STORE_ID: ${PATHAO_STORE_ID}
+      PATHAO_CITY_ID: ${PATHAO_CITY_ID}
+      PATHAO_ZONE_ID: ${PATHAO_ZONE_ID}
+      PATHAO_SENDER_NAME: ${PATHAO_SENDER_NAME}
+      PATHAO_SENDER_PHONE: ${PATHAO_SENDER_PHONE}
+      PATHAO_SENDER_ADDRESS: ${PATHAO_SENDER_ADDRESS}
+      PATHAO_WEBHOOK_SECRET: ${PATHAO_WEBHOOK_SECRET}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASS: ${EMAIL_PASS}
+      EMAIL_REPORT_TO: ${EMAIL_REPORT_TO}
+      WC_URL: ${WC_URL}
+      WC_KEY: ${WC_KEY}
+      WC_SECRET: ${WC_SECRET}
+      WC_WEBHOOK_SECRET: ${WC_WEBHOOK_SECRET}
     depends_on:
       mysql:
         condition: service_healthy

@@ -1,18 +1,38 @@
 const BASE = '/api';
+const TOKEN_KEY = 'hc_token';
+const getToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } };
+const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
+export const clearToken = () => setToken(null);
+
 async function api(path, opts = {}) {
   const url = BASE + path;
+  const token = getToken();
   const res = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...opts.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: "Bearer " + token } : {}),
+      ...opts.headers,
+    },
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
+  if (res.status === 401) {
+    // Token missing/expired — drop the stale session and force a fresh login
+    clearToken();
+    try { localStorage.removeItem('hc_session'); } catch {}
+    if (typeof window !== "undefined" && path !== "/login") window.location.reload();
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || "Request failed");
   }
   return res.json();
 }
-export const login         = (d)    => api("/login", { method: "POST", body: d });
+export const login = async (d) => {
+  const r = await api("/login", { method: "POST", body: d });
+  if (r && r.token) setToken(r.token);
+  return r;
+};
 export const getUsers      = ()     => api("/users");
 export const addUser       = (d)    => api("/users", { method: "POST", body: d });
 export const updateUser    = (id,d) => api(`/users/${id}`, { method: "PUT", body: d });

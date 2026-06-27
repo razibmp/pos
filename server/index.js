@@ -2,6 +2,7 @@ const express  = require("express");
 const cors     = require("cors");
 const mysql    = require("mysql2/promise");
 const bcrypt   = require("bcryptjs");
+const crypto   = require("crypto");
 const path     = require("path");
 const Pathao   = require("./pathao");
 const WC       = require("./woocommerce");
@@ -9,8 +10,18 @@ const nodemailer = require("nodemailer");
 const cron       = require("node-cron");
 
 const app = express();
+// Trust exactly one proxy hop (our nginx) so req.ip is the real client IP, not a spoofable XFF entry
+app.set("trust proxy", 1);
 app.use(cors({ origin: false }));
-app.use(express.json({ limit: "1mb" }));
+// Capture the raw body so we can verify webhook HMAC signatures
+app.use(express.json({ limit: "1mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
+// Baseline security headers on every API/HTML response
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 app.use(express.static(path.join(__dirname, "public")));
 
 // Serve public order form
@@ -345,48 +356,120 @@ async function logStockChange(product_id, change_qty, reason, ref="", changed_by
   } catch(e) { console.error("Stock log error:", e.message); }
 }
 
-// ── LOGIN RATE LIMITER ────────────────────────────────────────────────────────
+// ── RATE LIMITER ──────────────────────────────────────────────────────────────
 const _loginAttempts = new Map();
-function loginRateCheck(ip) {
+const _publicOrderAttempts = new Map();
+function rateCheck(map, key, max, windowMs) {
   const now = Date.now();
-  let e = _loginAttempts.get(ip) || { n: 0, reset: now + 15 * 60 * 1000 };
-  if (now > e.reset) { e.n = 0; e.reset = now + 15 * 60 * 1000; }
+  let e = map.get(key) || { n: 0, reset: now + windowMs };
+  if (now > e.reset) { e.n = 0; e.reset = now + windowMs; }
   e.n++;
-  _loginAttempts.set(ip, e);
-  return e.n > 10;
+  map.set(key, e);
+  return e.n > max;
+}
+// Periodic cleanup so the maps don't grow unbounded
+setInterval(() => {
+  const now = Date.now();
+  for (const m of [_loginAttempts, _publicOrderAttempts]) {
+    for (const [k, v] of m) if (now > v.reset) m.delete(k);
+  }
+}, 30 * 60 * 1000).unref?.();
+
+// ── TOKEN AUTH ────────────────────────────────────────────────────────────────
+const AUTH_SECRET = process.env.AUTH_SECRET || crypto.randomBytes(32).toString("hex");
+if (!process.env.AUTH_SECRET)
+  console.warn("⚠️  AUTH_SECRET not set — using a random secret; all sessions reset on restart. Set AUTH_SECRET in .env for stable sessions.");
+
+function signToken(payload) {
+  const body = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + 12 * 60 * 60 * 1000 })).toString("base64url");
+  const sig  = crypto.createHmac("sha256", AUTH_SECRET).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+function verifyToken(token) {
+  try {
+    if (!token) return null;
+    const [body, sig] = token.split(".");
+    if (!body || !sig) return null;
+    const expect = crypto.createHmac("sha256", AUTH_SECRET).update(body).digest("base64url");
+    const a = Buffer.from(sig), b = Buffer.from(expect);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const data = JSON.parse(Buffer.from(body, "base64url").toString());
+    if (!data.exp || Date.now() > data.exp) return null;
+    return data;
+  } catch { return null; }
+}
+
+// Routes under /api that are intentionally public (no auth token required)
+const PUBLIC_API = new Set([
+  "/login",
+  "/products/public",
+  "/orders/public",
+  "/webhook/woocommerce",
+  "/webhook/pathao",
+  "/health",
+]);
+// Guard: every /api route requires a valid token unless explicitly public
+app.use("/api", (req, res, next) => {
+  if (req.method === "OPTIONS") return next();
+  if (PUBLIC_API.has(req.path)) return next();
+  const hdr = req.headers.authorization || "";
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : null;
+  const user = verifyToken(token);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  req.user = user;
+  next();
+});
+function requireRole(...roles) {
+  return (req, res, next) =>
+    roles.includes(req.user?.role) ? next() : res.status(403).json({ error: "Forbidden" });
 }
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 app.post("/api/login", async (req, res) => {
   try {
-    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
-    if (loginRateCheck(ip)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    const ip = req.ip || "unknown";
+    const uname = (req.body?.username || "").toLowerCase().trim();
+    // Throttle per-IP and per-username (15 min window) to slow credential stuffing
+    if (rateCheck(_loginAttempts, "ip:" + ip, 10, 15 * 60 * 1000) ||
+        (uname && rateCheck(_loginAttempts, "user:" + uname, 10, 15 * 60 * 1000)))
+      return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
     const [[user]] = await q("SELECT * FROM users WHERE username = ?", [username.toLowerCase().trim()]);
     if (!user || !bcrypt.compareSync(password, user.password))
       return res.status(401).json({ error: "Invalid username or password" });
-    res.json({ id: user.id, username: user.username, name: user.name, role: user.role, emoji: user.emoji });
+    const token = signToken({ id: user.id, role: user.role, username: user.username });
+    res.json({ token, id: user.id, username: user.username, name: user.name, role: user.role, emoji: user.emoji });
   } catch(e) { res.status(500).json({ error: "Login failed" }); }
 });
 
-// ── USERS ────────────────────────────────────────────────────────────────────
-app.get("/api/users", async (_, res) => {
+// ── USERS (Owner only) ─────────────────────────────────────────────────────────
+const WEAK_PASSWORDS = new Set(["1234", "12345", "123456", "password", "admin", "0000", "1111"]);
+function validatePassword(pw) {
+  if (!pw || pw.length < 6) return "Password must be at least 6 characters";
+  if (WEAK_PASSWORDS.has(pw.toLowerCase())) return "Password is too common — choose a stronger one";
+  return null;
+}
+app.get("/api/users", requireRole("Owner"), async (_, res) => {
   const [rows] = await q("SELECT id,username,name,role,emoji,created_at FROM users ORDER BY id");
   res.json(rows);
 });
-app.post("/api/users", async (req, res) => {
+app.post("/api/users", requireRole("Owner"), async (req, res) => {
   const { username, password, name, role, emoji } = req.body;
+  const pwErr = validatePassword(password);
+  if (pwErr) return res.status(400).json({ error: pwErr });
   try {
-    const hash = bcrypt.hashSync(password || "1234", 10);
+    const hash = bcrypt.hashSync(password, 10);
     const [r] = await q("INSERT INTO users (username,password,name,role,emoji) VALUES (?,?,?,?,?)",
       [username.toLowerCase().trim(), hash, name, role||"Staff", emoji||"🧑‍🔧"]);
     res.json({ id: r.insertId, username, name, role: role||"Staff", emoji: emoji||"🧑‍🔧" });
   } catch(e) { res.status(400).json({ error: "Username already exists" }); }
 });
-app.put("/api/users/:id", async (req, res) => {
+app.put("/api/users/:id", requireRole("Owner"), async (req, res) => {
   const { name, role, emoji, password } = req.body;
   if (password) {
+    const pwErr = validatePassword(password);
+    if (pwErr) return res.status(400).json({ error: pwErr });
     const hash = bcrypt.hashSync(password, 10);
     await q("UPDATE users SET name=?,role=?,emoji=?,password=? WHERE id=?", [name,role,emoji,hash,req.params.id]);
   } else {
@@ -394,7 +477,7 @@ app.put("/api/users/:id", async (req, res) => {
   }
   res.json({ ok: true });
 });
-app.delete("/api/users/:id", async (req, res) => {
+app.delete("/api/users/:id", requireRole("Owner"), async (req, res) => {
   await q("DELETE FROM users WHERE id=?", [req.params.id]);
   res.json({ ok: true });
 });
@@ -826,16 +909,29 @@ app.get("/api/products/public", async (_, res) => {
 
 app.post("/api/orders/public", async (req, res) => {
   try {
-    const customer_name    = req.body.customer_name    || "";
-    const customer_phone   = req.body.customer_phone   || "";
-    const customer_address = req.body.customer_address || "";
+    // Rate limit: max 15 public orders per IP per 10 minutes (anti-spam)
+    const ip = req.ip || "unknown";
+    if (rateCheck(_publicOrderAttempts, ip, 15, 10 * 60 * 1000))
+      return res.status(429).json({ error: "Too many requests. Please try again later." });
+
+    const clean = (v, max) => String(v || "").trim().slice(0, max);
+    const customer_name    = clean(req.body.customer_name, 120);
+    const customer_phone   = clean(req.body.customer_phone, 30);
+    const customer_address = clean(req.body.customer_address, 400);
     const product_id       = req.body.product_id ? +req.body.product_id : null;
-    const qty              = parseInt(req.body.qty) || 1;
-    const sell_price       = parseFloat(req.body.sell_price)      || 0;
-    const delivery_type    = req.body.delivery_type               || "inside";
-    const delivery_charge  = parseFloat(req.body.delivery_charge) || 80;
-    const total            = parseFloat(req.body.total)           || delivery_charge;
-    const notes            = req.body.notes || "";
+    const qty              = Math.min(Math.max(parseInt(req.body.qty) || 1, 1), 100);
+    const sell_price       = Math.max(parseFloat(req.body.sell_price)      || 0, 0);
+    const delivery_type    = req.body.delivery_type === "outside" ? "outside" : "inside";
+    const delivery_charge  = Math.max(parseFloat(req.body.delivery_charge) || 80, 0);
+    const total            = Math.max(parseFloat(req.body.total)           || delivery_charge, 0);
+    const notes            = clean(req.body.notes, 500);
+
+    // Basic validation — name, phone, and a sane phone format are required
+    if (!customer_name || !customer_phone)
+      return res.status(400).json({ error: "Name and phone are required" });
+    if (!/^[0-9+\-\s()]{6,30}$/.test(customer_phone))
+      return res.status(400).json({ error: "Invalid phone number" });
+
     const inv              = "ORD-" + Date.now().toString().slice(-6);
 
     // Resolve product name from DB if product_id provided
@@ -1191,9 +1287,25 @@ async function processWCOrder(order) {
   return { success: true, pendingOrderId: pendingRow.insertId };
 }
 
+// Verify the WooCommerce webhook HMAC-SHA256 signature against the shared secret
+function verifyWCSignature(req) {
+  const secret = process.env.WC_WEBHOOK_SECRET || "thc_webhook_2024";
+  const sig = req.headers["x-wc-webhook-signature"];
+  if (!sig || !req.rawBody) return false;
+  const expect = crypto.createHmac("sha256", secret).update(req.rawBody).digest("base64");
+  try {
+    const a = Buffer.from(sig), b = Buffer.from(expect);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch { return false; }
+}
+
 // WooCommerce order webhook
 app.post("/api/webhook/woocommerce", async (req, res) => {
   try {
+    if (!verifyWCSignature(req)) {
+      console.warn("🚫 WooCommerce webhook: invalid signature");
+      return res.status(401).json({ error: "Invalid signature" });
+    }
     const order = req.body;
     console.log(`🛒 WooCommerce webhook: order #${order.id} (${order.status})`);
 
@@ -1358,6 +1470,19 @@ cron.schedule("*/30 * * * *", async () => {
 // Set this in Pathao merchant panel: https://yourdomain.com/api/webhook/pathao
 app.post("/api/webhook/pathao", async (req, res) => {
   try {
+    // Require a shared secret (set PATHAO_WEBHOOK_SECRET and append ?secret=... or send
+    // X-Pathao-Signature in the Pathao panel webhook URL). Without it, anyone could forge
+    // status updates — including "cancelled", which deletes the linked sale.
+    const secret = process.env.PATHAO_WEBHOOK_SECRET;
+    if (secret) {
+      const provided = req.headers["x-pathao-signature"] || req.query.secret;
+      if (provided !== secret) {
+        console.warn("🚫 Pathao webhook: invalid/missing secret");
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+    } else {
+      console.warn("⚠️  PATHAO_WEBHOOK_SECRET not set — Pathao webhook is unauthenticated. Set it in .env and update the webhook URL in the Pathao panel.");
+    }
     const data = req.body;
     console.log("📦 Pathao webhook received:", JSON.stringify(data));
 

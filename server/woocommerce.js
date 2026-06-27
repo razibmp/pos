@@ -76,7 +76,7 @@ async function updateOrderStatus(orderId, status) {
 }
 
 // Register webhook in WooCommerce
-async function registerWebhook(deliveryUrl, secret="thc_webhook_2024") {
+async function registerWebhook(deliveryUrl, secret = process.env.WC_WEBHOOK_SECRET || "thc_webhook_2024") {
   return wcRequest("POST", "/webhooks", {
     name        : "MGT Order Sync",
     topic       : "order.created",
