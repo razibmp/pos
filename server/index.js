@@ -149,6 +149,9 @@ async function initDB() {
     FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
   )`);
 
+  // Simplified purchases: track how much has been paid to the supplier
+  try { await q("ALTER TABLE purchases ADD COLUMN amount_sent DECIMAL(12,2) DEFAULT 0"); } catch(e) {}
+
   await q(`CREATE TABLE IF NOT EXISTS stakeholders (
     id         INT AUTO_INCREMENT PRIMARY KEY,
     name       VARCHAR(100) NOT NULL,
@@ -520,17 +523,15 @@ app.get("/api/purchases", async (_, res) => {
 });
 app.post("/api/purchases", async (req, res) => {
   const p = req.body;
+  const name   = (p.name || p.supplierName || "").trim();
+  const date   = p.date || p.orderDate || new Date().toISOString().split("T")[0];
+  const amount = +p.amount || 0;
+  const sent   = +p.sent   || 0;
   const [r] = await q(
-    `INSERT INTO purchases (supplier_name,order_date,status,product_cost_bdt,china_shipping_bdt,cnf_bdt,
-     customs_duty_bdt,vat_bdt,agent_fees_bdt,local_transport_bdt,other_bdt,total_landed,total_qty,cost_per_unit,notes)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [p.supplierName,p.orderDate,p.status,p.productCostBDT||0,p.chinaShippingBDT||0,p.cnfBDT||0,
-     p.customsDutyBDT||0,p.vatBDT||0,p.agentFeesBDT||0,p.localTransportBDT||0,p.otherBDT||0,
-     p.totalLanded||0,p.totalQty||0,p.costPerUnit||0,p.notes||""]);
-  const poId = r.insertId;
-  for (const item of (p.items||[]))
-    await q("INSERT INTO purchase_items (purchase_id,product_id,qty) VALUES (?,?,?)", [poId, item.productId||null, item.qty||0]);
-  res.json({ ...p, id: poId });
+    `INSERT INTO purchases (supplier_name,order_date,status,total_landed,amount_sent,notes)
+     VALUES (?,?,?,?,?,?)`,
+    [name, date, p.status || "pending", amount, sent, p.notes || ""]);
+  res.json({ ...p, id: r.insertId });
 });
 app.put("/api/purchases/:id/status", async (req, res) => {
   const { status } = req.body;

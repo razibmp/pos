@@ -552,98 +552,66 @@ function Expenses({expenses,reload,toast}){
 
 // ── PURCHASES ────────────────────────────────────────────────────────────────
 function Purchases({purchases,products,reload,toast}){
-  const blank={supplierName:"",orderDate:todayStr(),status:"pending",productCostBDT:"",chinaShippingBDT:"",cnfBDT:"",customsDutyBDT:"",vatBDT:"",agentFeesBDT:"",localTransportBDT:"",otherBDT:"",notes:"",items:[{productId:"",qty:""}]};
+  const blank={name:"",amount:"",date:todayStr(),sent:"",notes:""};
   const [form,setForm]=useState(blank);const ff=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
-  const calc=f=>{const a=+f.productCostBDT||0,b=+f.chinaShippingBDT||0,c=+f.cnfBDT||0,d=+f.customsDutyBDT||0,e=+f.vatBDT||0,g=+f.agentFeesBDT||0,h=+f.localTransportBDT||0,j=+f.otherBDT||0;const tot=a+b+c+d+e+g+h+j;const tq=f.items.reduce((s,i)=>s+(+i.qty||0),0);return{totalLanded:tot,totalQty:tq,costPerUnit:tq>0?tot/tq:0,productCostBDT:a,chinaShippingBDT:b,cnfBDT:c,customsDutyBDT:d,vatBDT:e,agentFeesBDT:g,localTransportBDT:h,otherBDT:j}};
-  const cc=calc(form);
-  const addItem=()=>setForm(p=>({...p,items:[...p.items,{productId:"",qty:""}]}));
-  const rmItem=i=>setForm(p=>({...p,items:p.items.filter((_,idx)=>idx!==i)}));
-  const upItem=(i,k,v)=>setForm(p=>({...p,items:p.items.map((it,idx)=>idx===i?{...it,[k]:v}:it)}));
+  const amount=+form.amount||0, sent=+form.sent||0, due=amount-sent;
   const submit=async()=>{
-    if(!form.supplierName.trim()){toast("❌ Enter supplier!");return;}
-    const vi=form.items.filter(i=>i.productId&&+i.qty>0);if(!vi.length){toast("❌ Add items!");return;}
-    await API.addPurchase({...form,items:vi.map(i=>({productId:+i.productId,qty:+i.qty})),...cc});
-    setForm(blank);reload();toast("✅ PO created!");
+    if(!form.name.trim()){toast("❌ Enter a name!");return;}
+    if(!form.amount){toast("❌ Enter an amount!");return;}
+    await API.addPurchase({name:form.name.trim(),amount,date:form.date||todayStr(),sent,notes:form.notes||""});
+    setForm(blank);reload();toast("✅ Purchase saved!");
   };
-  const setStatus=async(id,s)=>{await API.updatePurchaseStatus(id,s);reload();toast(s==="received"?"✅ Stock updated!":"✅ Status updated!")};
-  const stC={pending:{bg:"#FEF3C7",c:"#92400E"},transit:{bg:"#DBEAFE",c:"#1E40AF"},customs:{bg:"#EDE9FE",c:"#5B21B6"},received:{bg:"#D1FAE5",c:"#065F46"}};
+  const totAmount=purchases.reduce((a,p)=>a+(+p.total_landed||0),0);
+  const totSent=purchases.reduce((a,p)=>a+(+p.amount_sent||0),0);
+  const totDue=totAmount-totSent;
   return <div style={{display:"flex",flexDirection:"column",gap:16}}>
     <div className="grid4">
-      <SC icon="🚢" label="Total POs" value={purchases.length} accent="#3B82F6"/>
-      <SC icon="⏳" label="Open" value={purchases.filter(p=>p.status!=="received").length} accent="#F59E0B"/>
-      <SC icon="💸" label="Total Landed" value={fmt(purchases.reduce((a,p)=>a+(p.total_landed||0),0))} accent="#EF476F"/>
-      <SC icon="✅" label="Received" value={purchases.filter(p=>p.status==="received").length} accent="#06D6A0"/>
+      <SC icon="🚢" label="Total Purchases" value={purchases.length} accent="#3B82F6"/>
+      <SC icon="💸" label="Total Amount" value={fmt(totAmount)} accent="#EF476F"/>
+      <SC icon="💵" label="Total Sent" value={fmt(totSent)} accent="#06D6A0"/>
+      <SC icon="⏳" label="Total Due" value={fmt(totDue)} accent="#F59E0B"/>
     </div>
     <div className="split">
       <Card>
-        <CT>📦 New Purchase Order</CT>
+        <CT>📦 New Purchase</CT>
         <div style={{display:"flex",flexDirection:"column",gap:11}}>
+          <FI label="Name *" value={form.name} onChange={ff("name")} placeholder="e.g. Guangzhou Toys / LEGO batch"/>
           <div className="grid2" style={{gap:10}}>
-            <FI label="Supplier *" value={form.supplierName} onChange={ff("supplierName")} placeholder="e.g. Guangzhou Toys"/>
-            <FI label="Date" type="date" value={form.orderDate} onChange={ff("orderDate")}/>
+            <FI label="Amount (৳) *" type="number" value={form.amount} onChange={ff("amount")} placeholder="0"/>
+            <FI label="Date" type="date" value={form.date} onChange={ff("date")}/>
+            <FI label="Sent (৳)" type="number" value={form.sent} onChange={ff("sent")} placeholder="0"/>
+            <FI label="Notes" value={form.notes} onChange={ff("notes")} placeholder="Optional..."/>
           </div>
-          <FS label="Status" value={form.status} onChange={ff("status")}><option value="pending">⏳ Pending</option><option value="transit">🚢 Transit</option><option value="customs">🏛️ Customs</option><option value="received">✅ Received</option></FS>
-          <div style={{background:"#FFF8F0",borderRadius:11,padding:12,border:"1.5px solid #F0D9C0"}}>
-            <div style={{fontSize:10,fontWeight:800,color:"#FF6B35",textTransform:"uppercase",marginBottom:8}}>🇨🇳 Supplier Costs (৳)</div>
-            <div className="grid2" style={{gap:8,marginBottom:10}}>
-              <FI label="Product Cost" type="number" value={form.productCostBDT} onChange={ff("productCostBDT")} placeholder="0"/>
-              <FI label="China Shipping" type="number" value={form.chinaShippingBDT} onChange={ff("chinaShippingBDT")} placeholder="0"/>
-            </div>
-            <div style={{fontSize:10,fontWeight:800,color:"#8B5CF6",textTransform:"uppercase",marginBottom:8}}>🇧🇩 BD Import Costs (৳)</div>
-            <div className="grid2" style={{gap:8}}>
-              <FI label="C&F" type="number" value={form.cnfBDT} onChange={ff("cnfBDT")} placeholder="0"/>
-              <FI label="Customs" type="number" value={form.customsDutyBDT} onChange={ff("customsDutyBDT")} placeholder="0"/>
-              <FI label="VAT" type="number" value={form.vatBDT} onChange={ff("vatBDT")} placeholder="0"/>
-              <FI label="Agent Fees" type="number" value={form.agentFeesBDT} onChange={ff("agentFeesBDT")} placeholder="0"/>
-              <FI label="Transport" type="number" value={form.localTransportBDT} onChange={ff("localTransportBDT")} placeholder="0"/>
-              <FI label="Other" type="number" value={form.otherBDT} onChange={ff("otherBDT")} placeholder="0"/>
-            </div>
-          </div>
-          <div>
-            <div style={{fontSize:10,fontWeight:800,color:"#9CA3AF",textTransform:"uppercase",marginBottom:8}}>Items</div>
-            {form.items.map((item,i)=><div key={i} style={{display:"grid",gridTemplateColumns:"2fr 1fr auto",gap:8,marginBottom:8}}>
-              <FS value={item.productId} onChange={e=>upItem(i,"productId",e.target.value)}><option value="">— Product —</option>{products.map(p=><option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}</FS>
-              <FI type="number" value={item.qty} onChange={e=>upItem(i,"qty",e.target.value)} placeholder="Qty"/>
-              <button onClick={()=>rmItem(i)} style={{background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:8,padding:"9px 10px",cursor:"pointer",fontWeight:800}}>✕</button>
-            </div>)}
-            <button onClick={addItem} style={{background:"#EDE9FE",color:"#5B21B6",border:"none",borderRadius:8,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:12}}>+ Add Row</button>
-          </div>
-          <FI label="Notes" value={form.notes} onChange={ff("notes")} placeholder="Ref number..."/>
         </div>
-        <Btn onClick={submit} style={{width:"100%",marginTop:12}}>📦 Create PO</Btn>
+        <Btn onClick={submit} style={{width:"100%",marginTop:12}}>📦 Save Purchase</Btn>
       </Card>
       <Card>
-        <CT>🧮 Landed Cost</CT>
-        <div style={{display:"flex",flexDirection:"column",gap:9}}>
-          {[["Product",cc.productCostBDT,"#FF6B35"],["China Ship",cc.chinaShippingBDT,"#F59E0B"],["C&F",cc.cnfBDT,"#3B82F6"],["Customs",cc.customsDutyBDT,"#8B5CF6"],["VAT",cc.vatBDT,"#EC4899"],["Agent",cc.agentFeesBDT,"#06D6A0"],["Transport",cc.localTransportBDT,"#10B981"],["Other",cc.otherBDT,"#6B7280"]].map(([l,v,c])=>
-            <div key={l} style={{display:"flex",alignItems:"center",gap:8}}><div style={{fontSize:11,fontWeight:600,color:"#6B7280",flex:1}}>{l}</div><Bar value={v} max={Math.max(cc.totalLanded,1)} color={c}/><div style={{fontSize:11,fontWeight:800,minWidth:70,textAlign:"right"}}>{fmt(v)}</div></div>)}
+        <CT>🧮 Summary</CT>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {[["Amount",amount,"#EF476F"],["Sent",sent,"#06D6A0"]].map(([l,v,c])=>
+            <div key={l} style={{display:"flex",alignItems:"center",gap:8}}><div style={{fontSize:12,fontWeight:600,color:"#6B7280",flex:1}}>{l}</div><div style={{fontSize:14,fontWeight:800,color:c}}>{fmt(v)}</div></div>)}
           <div style={{borderTop:"2px dashed #F0D9C0",paddingTop:12,marginTop:4}}>
-            <div style={{background:"linear-gradient(135deg,#1A1A2E,#2D2D5E)",borderRadius:12,padding:"14px 16px",textAlign:"center"}}>
-              <div style={{fontSize:9,color:"rgba(255,255,255,.6)",fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Total Landed</div>
-              <div style={{fontFamily:"'Baloo 2',cursive",fontSize:28,fontWeight:800,color:"#FFD166"}}>{fmt(cc.totalLanded)}</div>
-              {cc.totalQty>0&&<div className="grid2" style={{gap:8,marginTop:10}}>
-                <div style={{background:"rgba(255,255,255,.08)",borderRadius:9,padding:8,textAlign:"center"}}><div style={{fontSize:9,color:"rgba(255,255,255,.5)",textTransform:"uppercase",fontWeight:700}}>Units</div><div style={{fontFamily:"'Baloo 2',cursive",fontSize:18,fontWeight:800,color:"#fff"}}>{cc.totalQty}</div></div>
-                <div style={{background:"rgba(255,255,255,.08)",borderRadius:9,padding:8,textAlign:"center"}}><div style={{fontSize:9,color:"rgba(255,255,255,.5)",textTransform:"uppercase",fontWeight:700}}>Per Unit</div><div style={{fontFamily:"'Baloo 2',cursive",fontSize:18,fontWeight:800,color:"#06D6A0"}}>{fmt(Math.round(cc.costPerUnit))}</div></div>
-              </div>}
+            <div style={{background:"linear-gradient(135deg,#1A1A2E,#2D2D5E)",borderRadius:12,padding:"16px",textAlign:"center"}}>
+              <div style={{fontSize:9,color:"rgba(255,255,255,.6)",fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Due (Amount − Sent)</div>
+              <div style={{fontFamily:"'Baloo 2',cursive",fontSize:30,fontWeight:800,color:due>0?"#FFD166":"#06D6A0"}}>{fmt(due)}</div>
             </div>
           </div>
         </div>
       </Card>
     </div>
     <Card>
-      <CT>📋 PO History ({purchases.length})</CT>
+      <CT>📋 Purchase History ({purchases.length})</CT>
       <div className="ovx"><table>
-        <thead><TH cols={["Date","Supplier","Landed","Per Unit","Status","Action"]}/></thead>
+        <thead><TH cols={["Date","Name","Amount","Sent","Due"]}/></thead>
         <tbody>
-          {purchases.length===0&&<tr><td colSpan={6}><Empty msg="No POs yet"/></td></tr>}
-          {purchases.map(po=>{const s=stC[po.status]||{bg:"#F3F4F6",c:"#6B7280"};const st={pending:"⏳ Pending",transit:"🚢 Transit",customs:"🏛️ Customs",received:"✅ Done"}[po.status]||po.status;
+          {purchases.length===0&&<tr><td colSpan={5}><Empty msg="No purchases yet"/></td></tr>}
+          {purchases.map(po=>{const a=+po.total_landed||0,s=+po.amount_sent||0,d=a-s;
           return <tr key={po.id} style={{borderBottom:"1px solid #F9F0E8"}} onMouseEnter={e=>e.currentTarget.style.background="#FFF8F0"} onMouseLeave={e=>e.currentTarget.style.background=""}>
             <td style={{padding:"8px 10px",color:"#9CA3AF",fontSize:11}}>{po.order_date}</td>
             <td style={{padding:"8px 10px",fontWeight:700,fontSize:12}}>{po.supplier_name}</td>
-            <td style={{padding:"8px 10px",fontWeight:800,color:"#3B82F6"}}>{fmt(po.total_landed)}</td>
-            <td style={{padding:"8px 10px",fontWeight:800,color:"#06D6A0"}}>{fmt(Math.round(po.cost_per_unit||0))}</td>
-            <td style={{padding:"8px 10px"}}><Pill bg={s.bg} color={s.c}>{st}</Pill></td>
-            <td style={{padding:"8px 10px"}}>{po.status!=="received"?<select value={po.status} onChange={e=>setStatus(po.id,e.target.value)} style={{border:"1.5px solid #F0D9C0",borderRadius:7,padding:"4px 7px",fontSize:11,fontFamily:"'Nunito',sans-serif",background:"#FFFAF7",outline:"none",cursor:"pointer"}}><option value="pending">⏳</option><option value="transit">🚢</option><option value="customs">🏛️</option><option value="received">✅ Received</option></select>:<span style={{fontSize:11,color:"#06D6A0",fontWeight:700}}>✓ Done</span>}</td>
+            <td style={{padding:"8px 10px",fontWeight:800,color:"#EF476F"}}>{fmt(a)}</td>
+            <td style={{padding:"8px 10px",fontWeight:800,color:"#06D6A0"}}>{fmt(s)}</td>
+            <td style={{padding:"8px 10px",fontWeight:800,color:d>0?"#F59E0B":"#06D6A0"}}>{fmt(d)}</td>
           </tr>})}
         </tbody>
       </table></div>
