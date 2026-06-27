@@ -1843,9 +1843,9 @@ export default function App(){
     <style>{css}</style>
 
     {/* HEADER */}
-    <div style={{background:"#15151E",padding:"0 12px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,position:"sticky",top:0,zIndex:100,borderBottom:"3px solid #E8002D"}}>
+    <div style={{background:"#15151E",padding:"0 12px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,position:"sticky",top:0,zIndex:100,borderBottom:"3px solid #0D9488"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-        <div style={{width:30,height:30,borderRadius:8,background:"#E8002D",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🎮</div>
+        <div style={{width:30,height:30,borderRadius:8,background:"#0D9488",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🎮</div>
         <span style={{fontSize:13,fontWeight:800,color:"#fff",letterSpacing:"-.01em",textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>The Hobby Center</span>
       </div>
       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
@@ -1854,14 +1854,14 @@ export default function App(){
           <span style={{fontSize:14}}>{user.emoji}</span>
           <div className="hide-mobile"><span style={{fontSize:12,fontWeight:600,color:"#fff",letterSpacing:"-.01em"}}>{user.name}</span><span style={{fontSize:11,color:"rgba(255,255,255,.45)",fontWeight:500,marginLeft:4}}> · {user.role}</span></div>
         </div>
-        <button onClick={doLogout} style={{background:"#E8002D",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:700,letterSpacing:".02em",textTransform:"uppercase",flexShrink:0}}>Sign Out</button>
+        <button onClick={doLogout} style={{background:"#0D9488",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:700,letterSpacing:".02em",textTransform:"uppercase",flexShrink:0}}>Sign Out</button>
       </div>
     </div>
 
     {/* TAB BAR — F1 style */}
     <div className="tabbar" style={{background:"#1E1E2D",display:"flex",overflowX:"auto",padding:"0 16px",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",borderBottom:"1px solid rgba(255,255,255,.07)"}}>
       <style>{`.tabbar::-webkit-scrollbar{display:none}`}</style>
-      {TABS.map(tb=><button key={tb.id} onClick={()=>setTab(tb.id)} style={{padding:"13px 16px",border:"none",background:"none",fontFamily:"inherit",fontSize:11,fontWeight:700,color:at===tb.id?"#fff":"rgba(255,255,255,.45)",borderBottom:at===tb.id?"3px solid #E8002D":"3px solid transparent",cursor:"pointer",whiteSpace:"nowrap",marginBottom:-1,flexShrink:0,letterSpacing:".06em",textTransform:"uppercase",transition:"color .15s"}}>{tb.icon} {tb.label}</button>)}
+      {TABS.map(tb=><button key={tb.id} onClick={()=>setTab(tb.id)} style={{padding:"13px 16px",border:"none",background:"none",fontFamily:"inherit",fontSize:11,fontWeight:700,color:at===tb.id?"#fff":"rgba(255,255,255,.45)",borderBottom:at===tb.id?"3px solid #0D9488":"3px solid transparent",cursor:"pointer",whiteSpace:"nowrap",marginBottom:-1,flexShrink:0,letterSpacing:".06em",textTransform:"uppercase",transition:"color .15s"}}>{tb.icon} {tb.label}</button>)}
     </div>
 
     {/* CONTENT */}
