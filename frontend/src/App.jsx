@@ -1768,9 +1768,18 @@ export default function App(){
   const [products,setProducts]=useState([]);const [sales,setSales]=useState([]);
   const [expenses,setExpenses]=useState([]);const [purchases,setPurchases]=useState([]);
   const [cats,setCats]=useState([]);const [stakeholders,setStakeholders]=useState([]);const [users,setUsers]=useState([]);const [deliveries,setDeliveries]=useState([]);const [pendingOrders,setPendingOrders]=useState([]);const [deliveryStats,setDeliveryStats]=useState([]);const [stockHistory,setStockHistory]=useState([]);
-  const [tab,setTab]=useState(()=>{const u=loadSession();return u?(ROLE_PERMS[u.role]||ROLE_PERMS.Staff).tabs[0]:"dashboard"});
+  const [tab,setTab]=useState(()=>{
+    const u=loadSession();
+    if(!u)return "dashboard";
+    const allowed=(ROLE_PERMS[u.role]||ROLE_PERMS.Staff).tabs;
+    let saved=null;try{saved=localStorage.getItem("hc_tab")}catch{}
+    return (saved&&allowed.includes(saved))?saved:allowed[0];
+  });
   const [toast,setToast]=useState(null);const [menuOpen,setMenuOpen]=useState(false);
   const t=msg=>setToast(msg);
+
+  // Remember the active tab across refreshes
+  useEffect(()=>{try{localStorage.setItem("hc_tab",tab)}catch{}},[tab]);
 
 
 
