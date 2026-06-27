@@ -552,24 +552,39 @@ function Expenses({expenses,reload,toast}){
 
 // ── PURCHASES ────────────────────────────────────────────────────────────────
 function Purchases({purchases,products,reload,toast}){
-  const blank={name:"",amount:"",date:todayStr(),sent:"",notes:""};
+  const blank={name:"",amount:"",date:todayStr(),notes:""};
   const [form,setForm]=useState(blank);const ff=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
-  const amount=+form.amount||0, sent=+form.sent||0, due=amount-sent;
+  const [file,setFile]=useState(null);const [preview,setPreview]=useState("");
+  const [viewInv,setViewInv]=useState(null);const [saving,setSaving]=useState(false);
+  const amount=+form.amount||0;
+  // Keep the original file for full-resolution upload; preview via a local object URL
+  const onFile=e=>{
+    const f=e.target.files?.[0];if(!f)return;
+    if(!f.type.startsWith("image/")){toast("❌ Please choose an image");return;}
+    setFile(f);setPreview(URL.createObjectURL(f));
+  };
+  const clearFile=()=>{if(preview)URL.revokeObjectURL(preview);setFile(null);setPreview("");};
   const submit=async()=>{
     if(!form.name.trim()){toast("❌ Enter a name!");return;}
     if(!form.amount){toast("❌ Enter an amount!");return;}
-    await API.addPurchase({name:form.name.trim(),amount,date:form.date||todayStr(),sent,notes:form.notes||""});
-    setForm(blank);reload();toast("✅ Purchase saved!");
+    setSaving(true);
+    try{
+      await API.addPurchase({name:form.name.trim(),amount,date:form.date||todayStr(),notes:form.notes||""},file);
+      setForm(blank);clearFile();reload();toast("✅ Purchase saved!");
+    }catch(err){toast("❌ "+err.message);}
+    finally{setSaving(false);}
+  };
+  const del=async(id)=>{
+    if(!window.confirm("Delete this purchase? This cannot be undone."))return;
+    await API.deletePurchase(id);reload();toast("🗑️ Purchase deleted");
   };
   const totAmount=purchases.reduce((a,p)=>a+(+p.total_landed||0),0);
-  const totSent=purchases.reduce((a,p)=>a+(+p.amount_sent||0),0);
-  const totDue=totAmount-totSent;
+  const withInv=purchases.filter(p=>p.has_invoice).length;
   return <div style={{display:"flex",flexDirection:"column",gap:16}}>
-    <div className="grid4">
+    <div className="grid3">
       <SC icon="🚢" label="Total Purchases" value={purchases.length} accent="#3B82F6"/>
       <SC icon="💸" label="Total Amount" value={fmt(totAmount)} accent="#EF476F"/>
-      <SC icon="💵" label="Total Sent" value={fmt(totSent)} accent="#06D6A0"/>
-      <SC icon="⏳" label="Total Due" value={fmt(totDue)} accent="#F59E0B"/>
+      <SC icon="🧾" label="With Invoice" value={withInv} accent="#06D6A0"/>
     </div>
     <div className="split">
       <Card>
@@ -579,43 +594,64 @@ function Purchases({purchases,products,reload,toast}){
           <div className="grid2" style={{gap:10}}>
             <FI label="Amount (৳) *" type="number" value={form.amount} onChange={ff("amount")} placeholder="0"/>
             <FI label="Date" type="date" value={form.date} onChange={ff("date")}/>
-            <FI label="Sent (৳)" type="number" value={form.sent} onChange={ff("sent")} placeholder="0"/>
-            <FI label="Notes" value={form.notes} onChange={ff("notes")} placeholder="Optional..."/>
+          </div>
+          <FI label="Notes" value={form.notes} onChange={ff("notes")} placeholder="Optional..."/>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:"#3C3C43",letterSpacing:"-.01em",display:"block",marginBottom:5}}>Invoice (proof of payment)</label>
+            {preview
+              ?<div style={{position:"relative",display:"inline-block"}}>
+                <img src={preview} alt="invoice" style={{maxWidth:"100%",maxHeight:180,borderRadius:10,border:"1px solid #E5E7EB",display:"block"}}/>
+                <button onClick={clearFile} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer",fontWeight:800,fontSize:12}}>✕</button>
+              </div>
+              :<label htmlFor="invfile" style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,border:"1.5px dashed #D2D2D7",borderRadius:10,padding:"16px",cursor:"pointer",color:"#6B7280",fontSize:13,fontWeight:600,background:"#FAFAFA"}}>📎 Upload Invoice Image</label>}
+            <input id="invfile" type="file" accept="image/*" onChange={onFile} style={{display:"none"}}/>
+            {file&&<div style={{fontSize:11,color:"#6B7280",marginTop:5}}>{file.name} · {(file.size/1024/1024).toFixed(2)} MB</div>}
           </div>
         </div>
-        <Btn onClick={submit} style={{width:"100%",marginTop:12}}>📦 Save Purchase</Btn>
+        <Btn onClick={submit} disabled={saving} style={{width:"100%",marginTop:12,opacity:saving?.6:1}}>{saving?"⏳ Saving…":"📦 Save Purchase"}</Btn>
       </Card>
       <Card>
-        <CT>🧮 Summary</CT>
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {[["Amount",amount,"#EF476F"],["Sent",sent,"#06D6A0"]].map(([l,v,c])=>
-            <div key={l} style={{display:"flex",alignItems:"center",gap:8}}><div style={{fontSize:12,fontWeight:600,color:"#6B7280",flex:1}}>{l}</div><div style={{fontSize:14,fontWeight:800,color:c}}>{fmt(v)}</div></div>)}
-          <div style={{borderTop:"2px dashed #F0D9C0",paddingTop:12,marginTop:4}}>
-            <div style={{background:"linear-gradient(135deg,#1A1A2E,#2D2D5E)",borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:9,color:"rgba(255,255,255,.6)",fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Due (Amount − Sent)</div>
-              <div style={{fontFamily:"'Baloo 2',cursive",fontSize:30,fontWeight:800,color:due>0?"#FFD166":"#06D6A0"}}>{fmt(due)}</div>
-            </div>
+        <CT>🧾 Invoice Preview</CT>
+        {preview
+          ?<div style={{textAlign:"center"}}>
+            <img src={preview} alt="invoice preview" style={{maxWidth:"100%",borderRadius:12,border:"1px solid #E5E7EB"}}/>
+            <div style={{marginTop:10,fontSize:13,fontWeight:700,color:"#1D1D1F"}}>{form.name||"—"} · {fmt(amount)}</div>
+            <div style={{fontSize:11,color:"#6B7280"}}>Attached as proof of payment</div>
           </div>
-        </div>
+          :<Empty msg="Upload an invoice image to preview it here"/>}
       </Card>
     </div>
     <Card>
       <CT>📋 Purchase History ({purchases.length})</CT>
       <div className="ovx"><table>
-        <thead><TH cols={["Date","Name","Amount","Sent","Due"]}/></thead>
+        <thead><TH cols={["Date","Name","Amount","Invoice","Action"]}/></thead>
         <tbody>
           {purchases.length===0&&<tr><td colSpan={5}><Empty msg="No purchases yet"/></td></tr>}
-          {purchases.map(po=>{const a=+po.total_landed||0,s=+po.amount_sent||0,d=a-s;
-          return <tr key={po.id} style={{borderBottom:"1px solid #F9F0E8"}} onMouseEnter={e=>e.currentTarget.style.background="#FFF8F0"} onMouseLeave={e=>e.currentTarget.style.background=""}>
+          {purchases.map(po=>
+          <tr key={po.id} style={{borderBottom:"1px solid #F9F0E8"}} onMouseEnter={e=>e.currentTarget.style.background="#FFF8F0"} onMouseLeave={e=>e.currentTarget.style.background=""}>
             <td style={{padding:"8px 10px",color:"#9CA3AF",fontSize:11}}>{po.order_date}</td>
             <td style={{padding:"8px 10px",fontWeight:700,fontSize:12}}>{po.supplier_name}</td>
-            <td style={{padding:"8px 10px",fontWeight:800,color:"#EF476F"}}>{fmt(a)}</td>
-            <td style={{padding:"8px 10px",fontWeight:800,color:"#06D6A0"}}>{fmt(s)}</td>
-            <td style={{padding:"8px 10px",fontWeight:800,color:d>0?"#F59E0B":"#06D6A0"}}>{fmt(d)}</td>
-          </tr>})}
+            <td style={{padding:"8px 10px",fontWeight:800,color:"#EF476F"}}>{fmt(+po.total_landed||0)}</td>
+            <td style={{padding:"8px 10px"}}>{po.has_invoice
+              ?<button onClick={()=>setViewInv(API.purchaseInvoiceUrl(po.id))} style={{background:"#FFF3ED",color:"#FF6B35",border:"1px solid #FFD9C7",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>🧾 Preview</button>
+              :<span style={{fontSize:11,color:"#AEAEB2"}}>—</span>}</td>
+            <td style={{padding:"8px 10px"}}><button onClick={()=>del(po.id)} style={{background:"#FEE2E2",color:"#991B1B",border:"none",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>🗑️</button></td>
+          </tr>)}
         </tbody>
       </table></div>
     </Card>
+    {viewInv&&<div onClick={()=>setViewInv(null)} style={{position:"fixed",inset:0,background:"rgba(26,26,46,.7)",zIndex:9998,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:14,maxWidth:720,maxHeight:"92vh",overflow:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:10}}>
+          <div style={{fontWeight:800,fontSize:14}}>🧾 Invoice</div>
+          <div style={{display:"flex",gap:8}}>
+            <a href={viewInv} target="_blank" rel="noreferrer" style={{textDecoration:"none"}}><Btn variant="secondary" style={{padding:"6px 12px"}}>↗ Open full size</Btn></a>
+            <Btn variant="secondary" onClick={()=>setViewInv(null)} style={{padding:"6px 12px"}}>Close</Btn>
+          </div>
+        </div>
+        <img src={viewInv} alt="invoice" style={{maxWidth:"100%",borderRadius:10,display:"block"}}/>
+      </div>
+    </div>}
   </div>;
 }
 

@@ -2,6 +2,8 @@ const express  = require("express");
 const cors     = require("cors");
 const mysql    = require("mysql2/promise");
 const bcrypt   = require("bcryptjs");
+const multer   = require("multer");
+const fs       = require("fs");
 const path     = require("path");
 const Pathao   = require("./pathao");
 const WC       = require("./woocommerce");
@@ -12,6 +14,22 @@ const app = express();
 app.use(cors({ origin: false }));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
+
+// ── FILE UPLOADS (invoice images saved on disk, persisted via a volume) ─────────
+const UPLOAD_DIR = path.join(__dirname, "data", "uploads");
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      const ext = (path.extname(file.originalname || "") || ".jpg").toLowerCase();
+      cb(null, `inv-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) =>
+    file.mimetype.startsWith("image/") ? cb(null, true) : cb(new Error("Only image files are allowed")),
+});
 
 // Serve public order form
 app.get("/order", (req, res) => {
@@ -151,6 +169,8 @@ async function initDB() {
 
   // Simplified purchases: track how much has been paid to the supplier
   try { await q("ALTER TABLE purchases ADD COLUMN amount_sent DECIMAL(12,2) DEFAULT 0"); } catch(e) {}
+  // Invoice image: filename of the uploaded file on disk (proof of payment)
+  try { await q("ALTER TABLE purchases ADD COLUMN invoice_path VARCHAR(255)"); } catch(e) {}
 
   await q(`CREATE TABLE IF NOT EXISTS stakeholders (
     id         INT AUTO_INCREMENT PRIMARY KEY,
@@ -513,25 +533,42 @@ app.delete("/api/expenses/:id", async (req, res) => {
 
 // ── PURCHASES ────────────────────────────────────────────────────────────────
 app.get("/api/purchases", async (_, res) => {
-  const [rows] = await q("SELECT * FROM purchases ORDER BY id DESC");
-  for (const row of rows) {
-    const [items] = await q("SELECT * FROM purchase_items WHERE purchase_id = ?", [row.id]);
-    row.items = items;
-    row.order_date = row.order_date?.toISOString?.().split("T")[0] || row.order_date;
-  }
-  res.json(rows);
+  const [rows] = await q(
+    "SELECT id,supplier_name,order_date,status,total_landed,amount_sent,notes,invoice_path,created_at FROM purchases ORDER BY id DESC");
+  res.json(rows.map(r => ({
+    ...r,
+    order_date: r.order_date?.toISOString?.().split("T")[0] || r.order_date,
+    has_invoice: !!r.invoice_path,
+  })));
 });
-app.post("/api/purchases", async (req, res) => {
+app.post("/api/purchases", upload.single("invoice"), async (req, res) => {
   const p = req.body;
   const name   = (p.name || p.supplierName || "").trim();
   const date   = p.date || p.orderDate || new Date().toISOString().split("T")[0];
   const amount = +p.amount || 0;
-  const sent   = +p.sent   || 0;
+  const invoicePath = req.file ? req.file.filename : null;
   const [r] = await q(
-    `INSERT INTO purchases (supplier_name,order_date,status,total_landed,amount_sent,notes)
+    `INSERT INTO purchases (supplier_name,order_date,status,total_landed,notes,invoice_path)
      VALUES (?,?,?,?,?,?)`,
-    [name, date, p.status || "pending", amount, sent, p.notes || ""]);
-  res.json({ ...p, id: r.insertId });
+    [name, date, p.status || "pending", amount, p.notes || "", invoicePath]);
+  res.json({ id: r.insertId, name, date, amount, notes: p.notes || "", has_invoice: !!invoicePath });
+});
+// Serve a purchase's invoice image file (full resolution) on demand
+app.get("/api/purchases/:id/invoice", async (req, res) => {
+  const [[row]] = await q("SELECT invoice_path FROM purchases WHERE id=?", [req.params.id]);
+  if (!row || !row.invoice_path) return res.status(404).json({ error: "No invoice" });
+  const file = path.join(UPLOAD_DIR, path.basename(row.invoice_path)); // basename guards against path traversal
+  if (!fs.existsSync(file)) return res.status(404).json({ error: "File missing" });
+  res.sendFile(file);
+});
+// Delete a purchase (and its invoice file)
+app.delete("/api/purchases/:id", async (req, res) => {
+  const [[row]] = await q("SELECT invoice_path FROM purchases WHERE id=?", [req.params.id]);
+  if (row && row.invoice_path) {
+    try { const f = path.join(UPLOAD_DIR, path.basename(row.invoice_path)); if (fs.existsSync(f)) fs.unlinkSync(f); } catch(e) {}
+  }
+  await q("DELETE FROM purchases WHERE id=?", [req.params.id]);
+  res.json({ ok: true });
 });
 app.put("/api/purchases/:id/status", async (req, res) => {
   const { status } = req.body;

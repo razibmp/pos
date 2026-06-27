@@ -31,8 +31,22 @@ export const addCategory   = (d)    => api("/categories", { method: "POST", body
 export const updateCategory= (id,d) => api(`/categories/${id}`, { method: "PUT", body: d });
 export const deleteCategory= (id)   => api(`/categories/${id}`, { method: "DELETE" });
 export const getPurchases  = ()     => api("/purchases");
-export const addPurchase   = (d)    => api("/purchases", { method: "POST", body: d });
+export const addPurchase   = async (fields, file) => {
+  const fd = new FormData();
+  Object.entries(fields).forEach(([k, v]) => fd.append(k, v ?? ""));
+  if (file) fd.append("invoice", file);
+  let token = null; try { token = localStorage.getItem("hc_token"); } catch {}
+  const res = await fetch(BASE + "/purchases", {
+    method: "POST",
+    headers: token ? { Authorization: "Bearer " + token } : {},
+    body: fd,
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); throw new Error(e.error || "Request failed"); }
+  return res.json();
+};
 export const updatePurchaseStatus=(id,s)=>api(`/purchases/${id}/status`,{method:"PUT",body:{status:s}});
+export const purchaseInvoiceUrl = (id) => `${BASE}/purchases/${id}/invoice`;
+export const deletePurchase = (id) => api(`/purchases/${id}`, { method: "DELETE" });
 export const getStakeholders= ()   => api("/stakeholders");
 export const addStakeholder = (d)  => api("/stakeholders", { method: "POST", body: d });
 export const updateStakeholder=(id,d)=>api(`/stakeholders/${id}`,{method:"PUT",body:d});

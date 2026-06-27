@@ -45,6 +45,8 @@ services:
       WC_URL: https://hobbycenterbd.com
       WC_KEY: ck_519a83df91ea4df972f9505ae92d75e615ba6530
       WC_SECRET: cs_9422cddb57db36a12a01fd2601ad2a906f8ef183
+    volumes:
+      - invoice-data:/app/data
     depends_on:
       mysql:
         condition: service_healthy
@@ -69,4 +71,6 @@ services:
 
 volumes:
   mysql-data:
+    driver: local
+  invoice-data:
     driver: local
