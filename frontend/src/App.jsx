@@ -4,6 +4,12 @@ import * as API from "./api.js";
 const todayStr = () => new Date().toISOString().split("T")[0];
 const fmt  = (n) => "৳" + Number(n||0).toLocaleString("en-IN");
 const pct  = (a,b) => b>0 ? Math.round((a/b)*100) : 0;
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+// "YYYY-MM" -> "Jul 26"
+const monthLabel = (key) => { const [y,m]=String(key).split("-"); return (MONTHS_SHORT[(+m||1)-1]||"?")+" "+String(y||"").slice(2); };
+// any date/timestamp -> "YYYY-MM" (or null if unparseable)
+const monthKey = (v) => { if(!v) return null; const d=new Date(v); if(isNaN(d)) return null; return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); };
+const compactAmt = (n) => { n=Number(n||0); if(Math.abs(n)>=1e5) return "৳"+(n/1e5).toFixed(1)+"L"; if(Math.abs(n)>=1e3) return "৳"+(n/1e3).toFixed(1)+"k"; return "৳"+Math.round(n); };
 
 const EXP_CATS = {
   salary:{label:"Salary",icon:"👩‍💼",color:"#EF476F"},office:{label:"Office/Rent",icon:"🏢",color:"#8B5CF6"},
@@ -87,6 +93,56 @@ const SC=({icon,label,value,sub,accent="#FF6B35"})=>(
   </div>
 );
 const Bar=({value,max,color})=>{const w=max>0?Math.min(100,(value/max)*100):0;return <div style={{height:5,borderRadius:4,background:"#F2F2F7",overflow:"hidden",flex:1}}><div style={{height:"100%",width:w+"%",background:color||"#FF6B35",borderRadius:4,transition:"width .5s ease"}}/></div>};
+// ── TREND CHART — vivid vertical bar chart; a bar is green when its month beat the previous one, red when it fell ──
+// data: [{label, value, sub?}] · `dark` renders for a dark panel background
+const UP="#22E29A", DOWN="#FF4D6D";
+const TrendChart=({data,color="#FF8A3D",height=250,format=compactAmt,dark=false})=>{
+  if(!data||data.length===0) return <Empty msg="Not enough data yet — bars appear as months add up 📈"/>;
+  const n=data.length;
+  const vals=data.map(d=>+d.value||0);
+  const maxV=Math.max(...vals,1);
+  const padT=34, padB=42, padL=46, padR=12;   // padL = left gutter reserved for axis labels
+  const stepX=Math.max(64,Math.min(120,520/n));
+  const barW=Math.min(46,stepX*0.56);
+  const W=padL+padR+stepX*n;
+  const plotH=height-padT-padB, baseY=padT+plotH;
+  const grid=[0,0.25,0.5,0.75,1];
+  const cx=i=> padL+stepX*i+stepX/2;
+  const barColor=(i)=> i===0?color:(vals[i]>=vals[i-1]?UP:DOWN);
+  // theme-aware colours
+  const T = dark
+    ? {gridBase:"rgba(255,255,255,.35)",grid:"rgba(255,255,255,.10)",scale:"rgba(255,255,255,.45)",val:"#FFFFFF",label:"rgba(255,255,255,.9)",sub:"rgba(255,255,255,.55)"}
+    : {gridBase:"#DADADF",grid:"#F0F0F4",scale:"#C7C7CC",val:"#1D1D1F",label:"#3C3C43",sub:"#AEAEB2"};
+  const barShadow = dark ? "drop-shadow(0 3px 6px rgba(0,0,0,.45))" : "drop-shadow(0 2px 4px rgba(0,0,0,.18))";
+  const textShadow = dark ? "0 1px 3px rgba(0,0,0,.6)" : "none";
+  return <div className="ovx" style={{width:"100%"}}>
+    <svg width={W} height={height} viewBox={`0 0 ${W} ${height}`} style={{display:"block",minWidth:"100%"}}>
+      {/* gridlines + left-axis scale labels (in reserved gutter) */}
+      {grid.map((f,i)=>{const gy=baseY-f*plotH;return <g key={"g"+i}>
+        <line x1={padL} y1={gy} x2={W-padR} y2={gy} stroke={f===0?T.gridBase:T.grid} strokeWidth="1"/>
+        <text x={padL-8} y={gy+3.5} textAnchor="end" fontSize="9.5" fontWeight="700" fill={T.scale}>{format(maxV*f)}</text>
+      </g>;})}
+      {/* bars */}
+      {data.map((d,i)=>{
+        const v=vals[i], h=Math.max(3,(v/maxV)*plotH), x=cx(i)-barW/2, y=baseY-h, c=barColor(i);
+        const prev=i>0?vals[i-1]:null;
+        const rising=prev===null?null:v>=prev;
+        const delta=(prev!==null&&prev>0)?Math.round(((v-prev)/prev)*100):null;
+        return <g key={"b"+i}>
+          <rect x={x} y={y} width={barW} height={h} rx="6" fill={c} style={{filter:barShadow}}>
+            <title>{d.label}: {format(v)}{d.sub?" · "+d.sub:""}</title>
+          </rect>
+          {/* glossy highlight strip for a sharper look */}
+          <rect x={x} y={y} width={Math.max(3,barW*0.28)} height={h} rx="6" fill="#FFFFFF" fillOpacity={dark?0.16:0.22}/>
+          <text x={cx(i)} y={y-19} textAnchor="middle" fontSize="11.5" fontWeight="800" fill={T.val} style={{textShadow}}>{format(v)}</text>
+          {rising!==null&&<text x={cx(i)} y={y-7} textAnchor="middle" fontSize="9.5" fontWeight="800" fill={rising?UP:DOWN} style={{textShadow}}>{rising?"▲":"▼"}{delta!==null?" "+Math.abs(delta)+"%":""}</text>}
+          <text x={cx(i)} y={baseY+16} textAnchor="middle" fontSize="10.5" fontWeight="700" fill={T.label} style={{textShadow}}>{d.label}</text>
+          {d.sub&&<text x={cx(i)} y={baseY+28} textAnchor="middle" fontSize="9" fontWeight="600" fill={T.sub}>{d.sub}</text>}
+        </g>;
+      })}
+    </svg>
+  </div>;
+};
 const Pill=({children,bg="#F2F2F7",color="#3C3C43"})=><span style={{background:bg,color,fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,display:"inline-block",whiteSpace:"nowrap",letterSpacing:"-.01em"}}>{children}</span>;
 const FI=({label,...p})=>{
   const [f,sf]=useState(false);
@@ -256,6 +312,13 @@ function Dashboard({products,sales,expenses,purchases,deliveries,deliveryStats})
   const pendingDeliveries=deliveries.filter(d=>d.status==="pending").length;
   const td_deliveries=deliveries.filter(d=>d.created_at===td&&d.status!=="cancelled");
   const cancelledToday=deliveries.filter(d=>d.created_at===td&&d.status==="cancelled").length;
+  // ── Monthly sales statistics (revenue & profit trend) ──
+  const monthlyAgg={};
+  sales.forEach(s=>{const k=monthKey(s.date);if(!k)return;const b=monthlyAgg[k]||(monthlyAgg[k]={rev:0,profit:0,count:0});b.rev+=+s.total||0;b.profit+=+s.profit||0;b.count++;});
+  const salesMonths=Object.keys(monthlyAgg).sort().slice(-6);
+  const revData=salesMonths.map(k=>({label:monthLabel(k),value:monthlyAgg[k].rev,sub:monthlyAgg[k].count+" sale(s)"}));
+  const profitData=salesMonths.map(k=>({label:monthLabel(k),value:monthlyAgg[k].profit}));
+  const [salesMetric,setSalesMetric]=useState("rev");
   return <div style={{display:"flex",flexDirection:"column",gap:16}}>
     <div className="grid5">
       <SC icon="💰" label="Today Revenue" value={fmt(revenue)} sub={ts.length+" sale(s) + ৳"+deliveryIncome+" delivery"} accent="#FF6B35"/>
@@ -306,6 +369,16 @@ function Dashboard({products,sales,expenses,purchases,deliveries,deliveryStats})
           </div>})}
       </Card>
     </div>
+    <Card style={{background:"linear-gradient(150deg,#141428 0%,#20204A 100%)",border:"1px solid rgba(255,255,255,.08)"}}>
+      <CT action={
+        <div style={{display:"flex",gap:6}}>
+          {[["rev","💰 Revenue"],["profit","📈 Profit"]].map(([k,l])=>
+            <button key={k} onClick={()=>setSalesMetric(k)} style={{border:"1.5px solid",borderColor:salesMetric===k?"#FF8A3D":"rgba(255,255,255,.22)",background:salesMetric===k?"#FF8A3D":"rgba(255,255,255,.06)",color:salesMetric===k?"#fff":"rgba(255,255,255,.7)",borderRadius:18,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>)}
+        </div>
+      }><span style={{color:"#fff"}}>📊 Monthly Sales Statistics</span></CT>
+      <TrendChart dark data={salesMetric==="rev"?revData:profitData} color={salesMetric==="rev"?"#FF8A3D":"#22E29A"}/>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.55)",fontWeight:600,textAlign:"center",marginTop:8}}>Last {salesMonths.length} month(s) · bar is <span style={{color:"#22E29A",fontWeight:800}}>green</span> when up vs previous month, <span style={{color:"#FF4D6D",fontWeight:800}}>red</span> when down</div>
+    </Card>
   </div>;
 }
 
@@ -1293,6 +1366,8 @@ function WooCommerce({toast}){
 // ── PRE-ORDERS ────────────────────────────────────────────────────────────────
 function PreOrders({toast}){
   const [orders,setOrders]=useState([]);
+  const [allOrders,setAllOrders]=useState([]);
+  const [preMetric,setPreMetric]=useState("value");
   const [months,setMonths]=useState([]);
   const [selMonth,setSelMonth]=useState("");
   const [loading,setLoading]=useState(false);
@@ -1330,8 +1405,13 @@ function PreOrders({toast}){
   const load=async(month="")=>{
     setLoading(true);
     try{
-      const [o,m]=await Promise.all([API.getPreOrders(month),API.getPreOrderMonths()]);
+      const [o,m,all]=await Promise.all([
+        API.getPreOrders(month),
+        API.getPreOrderMonths(),
+        month?API.getPreOrders(""):Promise.resolve(null),
+      ]);
       setOrders(o);setMonths(m);
+      setAllOrders(all||o); // when no month filter, `o` is already the full set
     }catch(e){toast("❌ "+e.message);}
     finally{setLoading(false);}
   };
@@ -1375,6 +1455,23 @@ function PreOrders({toast}){
   const pathaoCreated=orders.filter(o=>o.status==="pathao_created").length;
   const totalPaid=orders.reduce((a,o)=>a+(+o.paid_amount||0),0);
 
+  // ── Monthly business trend (from the full, unfiltered order set) ──
+  const preAgg={};
+  allOrders.forEach(o=>{
+    const k=monthKey(o.timestamp);if(!k)return;
+    const b=preAgg[k]||(preAgg[k]={value:0,paid:0,count:0});
+    b.value+=+o.product_price||0;
+    b.paid +=+o.paid_amount||0;
+    b.count++;
+  });
+  const preMonths=Object.keys(preAgg).sort().slice(-6);
+  const trendData=preMonths.map(k=>({
+    label:monthLabel(k),
+    value: preMetric==="orders"?preAgg[k].count : preMetric==="paid"?preAgg[k].paid : preAgg[k].value,
+    sub: preMetric==="orders"?null : preAgg[k].count+" order(s)",
+  }));
+  const preMetricCfg={value:{color:"#FF6B35",fmt:compactAmt},paid:{color:"#06D6A0",fmt:compactAmt},orders:{color:"#8B5CF6",fmt:(n)=>String(Math.round(n))}}[preMetric];
+
   return <div style={{display:"flex",flexDirection:"column",gap:16}}>
     <div className="grid4">
       <SC icon="📋" label="Total Orders" value={orders.length} accent="#8B5CF6"/>
@@ -1388,6 +1485,17 @@ function PreOrders({toast}){
       <SC icon="💵" label="Total Final" value={fmt(orders.reduce((a,o)=>a+(+o.final_price||(+o.product_price-(+o.paid_amount||0)+(+o.courier||0))),0))} accent="#06D6A0"/>
       <SC icon="✅" label="Pathao Created" value={pathaoCreated} accent="#8B5CF6"/>
     </div>
+
+    <Card style={{background:"linear-gradient(150deg,#141428 0%,#20204A 100%)",border:"1px solid rgba(255,255,255,.08)"}}>
+      <CT action={
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {[["value","💵 Order Value"],["paid","💰 Collected"],["orders","📦 Orders"]].map(([k,l])=>
+            <button key={k} onClick={()=>setPreMetric(k)} style={{border:"1.5px solid",borderColor:preMetric===k?"#FF8A3D":"rgba(255,255,255,.22)",background:preMetric===k?"#FF8A3D":"rgba(255,255,255,.06)",color:preMetric===k?"#fff":"rgba(255,255,255,.7)",borderRadius:18,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>)}
+        </div>
+      }><span style={{color:"#fff"}}>📈 Monthly Business Trend</span></CT>
+      <TrendChart dark data={trendData} color={preMetricCfg.color} format={preMetricCfg.fmt}/>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.55)",fontWeight:600,textAlign:"center",marginTop:8}}>Last {preMonths.length} month(s) · bar is <span style={{color:"#22E29A",fontWeight:800}}>green</span> when up vs previous month, <span style={{color:"#FF4D6D",fontWeight:800}}>red</span> when down</div>
+    </Card>
 
     <Card style={{padding:"12px 16px"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
