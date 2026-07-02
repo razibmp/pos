@@ -217,16 +217,21 @@ Notes:
 
 ## 8. Phased roadmap (execution order)
 
-| Phase | Deliverable | Risk |
-|-------|-------------|------|
-| **0. Done** | Settings table + per-integration config UI (#6); minimal UI (#1–5) | low |
-| **1. Tenant column** | Add `tenants` + `tenant_id` everywhere; backfill existing rows as `tenant_id=1` (`thc`); make uniqueness per-tenant | medium — schema migration |
-| **2. Tenant-bound queries** | Introduce `tq()` helper + `resolveTenant` middleware; JWT carries `tenant_id`; two-tenant isolation test in CI | **highest** — correctness/security critical |
-| **3. Path routing** | nginx `/:tenant` strip + `X-Tenant`; SPA reads slug, prefixes API, per-tenant branding | medium |
-| **4. Provisioning** | Platform-admin API + self-serve signup; seed flow | low |
-| **5. Wire integrations to per-tenant settings** | `pathao.js` / `woocommerce.js` read the tenant's `settings` row instead of env; encrypt secrets at rest | medium |
-| **6. Stateless + scale** | Move rate-limit/cron to Redis; multi-replica API; per-tenant cron with locks | medium |
-| **7. Billing** | Plans, limits, metering, Stripe | later |
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| **0.** | Settings table + per-integration config UI (#6); minimal UI (#1–5) | ✅ done |
+| **1. Tenant column** | Add `tenants` + `tenant_id` everywhere; backfill existing rows as `tenant_id=1` (`thc`); make uniqueness per-tenant | ✅ done |
+| **2. Tenant-bound queries** | `tq()` guard + tenant in JWT; every module scoped; two-tenant isolation test (`scripts/tenant-isolation-test.sh`) | ✅ done |
+| **3. Path routing** | SPA reads slug from URL path, sends `X-Tenant`, namespaces token/session, per-tenant branding via `GET /api/tenant` | ✅ done |
+| **4. Provisioning** | Platform-admin API `POST/GET /api/admin/tenants` (token-gated), seeds categories + Owner | ✅ done (API); self-serve signup UI: later |
+| **5. Wire integrations to per-tenant settings** | `pathao.js`/`woocommerce.js` read the tenant's `settings` (env fallback for thc); webhooks resolve tenant + verify per-tenant secret; per-tenant daily report | ✅ done · secrets-at-rest encryption: **still TODO** (S4) |
+| **6. Stateless + scale** | Move rate-limit/cron to Redis; multi-replica API; per-tenant cron with locks | ⬜ TODO |
+| **7. Billing** | Plans, limits, metering, Stripe | ⬜ later |
+
+**Security/QA follow-ups still open** (see `QA-SECURITY-REVIEW.md`): S4 encrypt
+integration secrets at rest, S5 don't ship seed password `1234`, S6 generic error
+messages, S7 escape report-email HTML; Q1 soft-void cancels, Q2 pin business
+timezone, Q3–Q6 polish.
 
 **Do Phase 2 most carefully** — a missed `tenant_id` filter is a cross-tenant data
 leak. The `tq()` helper + CI isolation test is the guardrail that makes the rest safe.
