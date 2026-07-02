@@ -399,6 +399,11 @@ async function migrateTenants() {
   try { await q("ALTER TABLE users ADD UNIQUE KEY uq_user_tenant (tenant_id, username)"); } catch(e) {}
   try { await q("ALTER TABLE categories DROP INDEX name"); } catch(e) {}
   try { await q("ALTER TABLE categories ADD UNIQUE KEY uq_cat_tenant (tenant_id, name)"); } catch(e) {}
+
+  // settings keyed only by `k` originally — make it (tenant_id, k) so each tenant
+  // has its own integration config row
+  try { await q("ALTER TABLE settings DROP PRIMARY KEY"); } catch(e) {}
+  try { await q("ALTER TABLE settings ADD PRIMARY KEY (tenant_id, k)"); } catch(e) {}
 }
 
 
@@ -541,8 +546,8 @@ function validatePassword(pw) {
   if (WEAK_PASSWORDS.has(pw.toLowerCase())) return "Password is too common — choose a stronger one";
   return null;
 }
-app.get("/api/users", requireRole("Owner"), async (_, res) => {
-  const [rows] = await q("SELECT id,username,name,role,emoji,created_at FROM users ORDER BY id");
+app.get("/api/users", requireRole("Owner"), async (req, res) => {
+  const [rows] = await tq(req, "SELECT id,username,name,role,emoji,created_at FROM users WHERE tenant_id=? ORDER BY id", [tenantId(req)]);
   res.json(rows);
 });
 app.post("/api/users", requireRole("Owner"), async (req, res) => {
@@ -551,25 +556,25 @@ app.post("/api/users", requireRole("Owner"), async (req, res) => {
   if (pwErr) return res.status(400).json({ error: pwErr });
   try {
     const hash = bcrypt.hashSync(password, 10);
-    const [r] = await q("INSERT INTO users (username,password,name,role,emoji) VALUES (?,?,?,?,?)",
-      [username.toLowerCase().trim(), hash, name, role||"Staff", emoji||"🧑‍🔧"]);
+    const [r] = await tq(req, "INSERT INTO users (tenant_id,username,password,name,role,emoji) VALUES (?,?,?,?,?,?)",
+      [tenantId(req), username.toLowerCase().trim(), hash, name, role||"Staff", emoji||"🧑‍🔧"]);
     res.json({ id: r.insertId, username, name, role: role||"Staff", emoji: emoji||"🧑‍🔧" });
   } catch(e) { res.status(400).json({ error: "Username already exists" }); }
 });
 app.put("/api/users/:id", requireRole("Owner"), async (req, res) => {
-  const { name, role, emoji, password } = req.body;
+  const { name, role, emoji, password } = req.body, t = tenantId(req);
   if (password) {
     const pwErr = validatePassword(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
     const hash = bcrypt.hashSync(password, 10);
-    await q("UPDATE users SET name=?,role=?,emoji=?,password=? WHERE id=?", [name,role,emoji,hash,req.params.id]);
+    await tq(req, "UPDATE users SET name=?,role=?,emoji=?,password=? WHERE id=? AND tenant_id=?", [name,role,emoji,hash,req.params.id,t]);
   } else {
-    await q("UPDATE users SET name=?,role=?,emoji=? WHERE id=?", [name,role,emoji,req.params.id]);
+    await tq(req, "UPDATE users SET name=?,role=?,emoji=? WHERE id=? AND tenant_id=?", [name,role,emoji,req.params.id,t]);
   }
   res.json({ ok: true });
 });
 app.delete("/api/users/:id", requireRole("Owner"), async (req, res) => {
-  await q("DELETE FROM users WHERE id=?", [req.params.id]);
+  await tq(req, "DELETE FROM users WHERE id=? AND tenant_id=?", [req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 
@@ -588,13 +593,13 @@ const maskSecrets = (obj={}) => {
     out[k] = (SECRET_FIELDS.has(k) && val) ? SECRET_MASK : val;
   return out;
 };
-async function readSetting(key) {
-  const [[row]] = await q("SELECT v FROM settings WHERE k=?", [key]);
+async function readSetting(tenant_id, key) {
+  const [[row]] = await q("SELECT v FROM settings WHERE tenant_id=? AND k=?", [tenant_id, key]);
   try { return row ? JSON.parse(row.v) : {}; } catch { return {}; }
 }
-app.get("/api/settings", requireRole("Owner"), async (_req, res) => {
+app.get("/api/settings", requireRole("Owner"), async (req, res) => {
   try {
-    const [rows] = await q("SELECT k,v FROM settings");
+    const [rows] = await tq(req, "SELECT k,v FROM settings WHERE tenant_id=?", [tenantId(req)]);
     const out = {};
     for (const key of INTEGRATION_KEYS) out[key] = {};
     for (const { k, v } of rows) {
@@ -604,10 +609,10 @@ app.get("/api/settings", requireRole("Owner"), async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put("/api/settings/:key", requireRole("Owner"), async (req, res) => {
-  const key = req.params.key;
+  const key = req.params.key, t = tenantId(req);
   if (!INTEGRATION_KEYS.has(key)) return res.status(400).json({ error: "Unknown integration" });
   try {
-    const existing = await readSetting(key);
+    const existing = await readSetting(t, key);
     const incoming = req.body && typeof req.body === "object" ? req.body : {};
     const merged = { ...existing };
     for (const [k, val] of Object.entries(incoming)) {
@@ -615,9 +620,9 @@ app.put("/api/settings/:key", requireRole("Owner"), async (req, res) => {
       if (SECRET_FIELDS.has(k) && val === SECRET_MASK) continue;
       merged[k] = val;
     }
-    await q(
-      "INSERT INTO settings (k,v) VALUES (?,?) ON DUPLICATE KEY UPDATE v=VALUES(v)",
-      [key, JSON.stringify(merged)]
+    await tq(req,
+      "INSERT INTO settings (tenant_id,k,v) VALUES (?,?,?) ON DUPLICATE KEY UPDATE v=VALUES(v)",
+      [t, key, JSON.stringify(merged)]
     );
     res.json(maskSecrets(merged));
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -781,38 +786,45 @@ app.put("/api/purchases/:id/status", async (req, res) => {
 });
 
 // ── STAKEHOLDERS ─────────────────────────────────────────────────────────────
-app.get("/api/stakeholders", async (_, res) => {
-  const [rows] = await q("SELECT * FROM stakeholders ORDER BY id");
+app.get("/api/stakeholders", async (req, res) => {
+  const t = tenantId(req);
+  const [rows] = await tq(req, "SELECT * FROM stakeholders WHERE tenant_id=? ORDER BY id", [t]);
   for (const row of rows) {
-    const [txs] = await q("SELECT * FROM stakeholder_transactions WHERE stakeholder_id=? ORDER BY date DESC", [row.id]);
+    const [txs] = await tq(req, "SELECT * FROM stakeholder_transactions WHERE stakeholder_id=? AND tenant_id=? ORDER BY date DESC", [row.id, t]);
     row.transactions = txs.map(t=>({...t, date: t.date?.toISOString?.().split("T")[0]||t.date, note: t.note||''}));
   }
   res.json(rows);
 });
 app.post("/api/stakeholders", async (req, res) => {
   const { name, emoji, share_pct, note } = req.body;
-  const [r] = await q("INSERT INTO stakeholders (name,emoji,share_pct,note) VALUES (?,?,?,?)",
-    [name, emoji||"👤", share_pct||0, note||""]);
+  const [r] = await tq(req, "INSERT INTO stakeholders (tenant_id,name,emoji,share_pct,note) VALUES (?,?,?,?,?)",
+    [tenantId(req), name, emoji||"👤", share_pct||0, note||""]);
   res.json({ id: r.insertId, name, emoji: emoji||"👤", share_pct: share_pct||0, note: note||"", transactions: [] });
 });
 app.put("/api/stakeholders/:id", async (req, res) => {
   const { name, emoji, share_pct, note } = req.body;
-  await q("UPDATE stakeholders SET name=?,emoji=?,share_pct=?,note=? WHERE id=?",
-    [name, emoji, share_pct, note, req.params.id]);
+  await tq(req, "UPDATE stakeholders SET name=?,emoji=?,share_pct=?,note=? WHERE id=? AND tenant_id=?",
+    [name, emoji, share_pct, note, req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 app.delete("/api/stakeholders/:id", async (req, res) => {
-  await q("DELETE FROM stakeholders WHERE id=?", [req.params.id]);
+  const t = tenantId(req);
+  // Remove the stakeholder and its transactions, both scoped to the tenant
+  await tq(req, "DELETE FROM stakeholder_transactions WHERE stakeholder_id=? AND tenant_id=?", [req.params.id, t]);
+  await tq(req, "DELETE FROM stakeholders WHERE id=? AND tenant_id=?", [req.params.id, t]);
   res.json({ ok: true });
 });
 app.post("/api/stakeholders/:id/transactions", async (req, res) => {
-  const { type, amount, date, note } = req.body;
-  const [r] = await q("INSERT INTO stakeholder_transactions (stakeholder_id,type,amount,date,note) VALUES (?,?,?,?,?)",
-    [req.params.id, type, amount, date, note||""]);
+  const { type, amount, date, note } = req.body, t = tenantId(req);
+  // Confirm the parent stakeholder belongs to this tenant before attaching a tx
+  const [[owner]] = await tq(req, "SELECT id FROM stakeholders WHERE id=? AND tenant_id=?", [req.params.id, t]);
+  if (!owner) return res.status(404).json({ error: "Not found" });
+  const [r] = await tq(req, "INSERT INTO stakeholder_transactions (tenant_id,stakeholder_id,type,amount,date,note) VALUES (?,?,?,?,?,?)",
+    [t, req.params.id, type, amount, date, note||""]);
   res.json({ id: r.insertId, stakeholder_id: +req.params.id, type, amount, date, note: note||"" });
 });
 app.delete("/api/stakeholders/transactions/:id", async (req, res) => {
-  await q("DELETE FROM stakeholder_transactions WHERE id=?", [req.params.id]);
+  await tq(req, "DELETE FROM stakeholder_transactions WHERE id=? AND tenant_id=?", [req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 

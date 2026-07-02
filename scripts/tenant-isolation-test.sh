@@ -31,6 +31,9 @@ teardown(){
          DELETE x FROM deliveries x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM pending_orders x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM preorders x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM stakeholder_transactions x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM stakeholders x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM settings x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM users x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE FROM tenants WHERE slug LIKE 'isotest\_%';" >/dev/null 2>&1 || true
 }
@@ -140,4 +143,28 @@ A_PRE=$(curl -s "$BASE/api/preorders" -H "Authorization: Bearer $TA" | first_id)
 curl -s -X DELETE "$BASE/api/preorders/$A_PRE" -H "Authorization: Bearer $TB" >/dev/null
 [ "$(curl -s "$BASE/api/preorders" -H "Authorization: Bearer $TA" | custs)" = "ISO-PreA" ] || fail "cross-tenant delete removed A's preorder"
 
-echo "✅ PASS — isolation holds: sales, products, categories, expenses, purchases, deliveries, pending-orders, preorders"
+# ── STAKEHOLDERS ──────────────────────────────────────────────────────────────
+curl -s -X POST "$BASE/api/stakeholders" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" -d '{"name":"ISO-ShA","share_pct":50}' >/dev/null
+curl -s -X POST "$BASE/api/stakeholders" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"name":"ISO-ShB","share_pct":50}' >/dev/null
+[ "$(curl -s "$BASE/api/stakeholders" -H "Authorization: Bearer $TA" | names)" = "ISO-ShA" ] || fail "A sees foreign stakeholders"
+[ "$(curl -s "$BASE/api/stakeholders" -H "Authorization: Bearer $TB" | names)" = "ISO-ShB" ] || fail "B sees foreign stakeholders"
+A_SH=$(curl -s "$BASE/api/stakeholders" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/stakeholders/$A_SH" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/stakeholders" -H "Authorization: Bearer $TA" | names)" = "ISO-ShA" ] || fail "cross-tenant delete removed A's stakeholder"
+
+# ── USERS (Owner-only, per-tenant) ────────────────────────────────────────────
+unames(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a.map(x=>x.username).sort().join(','))})"; }
+curl -s -X POST "$BASE/api/users" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" -d '{"username":"iso_ua","password":"pw12345","name":"UA","role":"Staff"}' >/dev/null
+curl -s -X POST "$BASE/api/users" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"username":"iso_ub","password":"pw12345","name":"UB","role":"Staff"}' >/dev/null
+[ "$(curl -s "$BASE/api/users" -H "Authorization: Bearer $TA" | unames)" = "iso_ua,owner" ] || fail "A sees foreign users"
+[ "$(curl -s "$BASE/api/users" -H "Authorization: Bearer $TB" | unames)" = "iso_ub,owner" ] || fail "B sees foreign users"
+
+# ── SETTINGS (per-tenant integration config) ──────────────────────────────────
+scid(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(String(JSON.parse(s).pathao.client_id||''))}catch{process.stdout.write('')}})"; }
+curl -s -X PUT "$BASE/api/settings/pathao" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" -d '{"enabled":true,"client_id":"ISO-A-cid"}' >/dev/null
+curl -s -X PUT "$BASE/api/settings/pathao" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"enabled":true,"client_id":"ISO-B-cid"}' >/dev/null
+[ "$(curl -s "$BASE/api/settings" -H "Authorization: Bearer $TA" | scid)" = "ISO-A-cid" ] || fail "A sees wrong settings"
+[ "$(curl -s "$BASE/api/settings" -H "Authorization: Bearer $TB" | scid)" = "ISO-B-cid" ] || fail "B sees wrong settings"
+
+echo "✅ PASS — isolation holds across all converted modules (sales, products, categories,"
+echo "   expenses, purchases, deliveries, pending/pre-orders, stakeholders, users, settings)"
