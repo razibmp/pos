@@ -529,6 +529,7 @@ app.post("/api/admin/tenants", requirePlatformAdmin, async (req, res) => {
     const hash = bcrypt.hashSync(ownerPassword, 10);
     await q("INSERT INTO users (tenant_id,username,password,name,role,emoji) VALUES (?,?,?,?,?,?)",
       [tid, ownerUsername.toLowerCase().trim(), hash, name || "Owner", "Owner", "👑"]);
+    _tenantCache.delete(slug);   // drop any stale cache entry for this slug
     console.log(`✅ Provisioned tenant '${slug}' (id=${tid})`);
     res.json({ ok: true, id: tid, slug, loginUrl: `/${slug}` });
   } catch (e) { res.status(500).json({ error: e.message }); }
