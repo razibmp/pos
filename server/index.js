@@ -190,7 +190,10 @@ async function initDB() {
   // Seed users
   const [[{cnt:uc}]] = await q("SELECT COUNT(*) as cnt FROM users");
   if (uc === 0) {
-    const hash = bcrypt.hashSync("1234", 10);
+    const seedPw = process.env.SEED_OWNER_PASSWORD || "1234";
+    if (!process.env.SEED_OWNER_PASSWORD)
+      console.warn("⚠️  SEED_OWNER_PASSWORD not set — seeding demo users with weak '1234'. Set it in .env before any real deployment.");
+    const hash = bcrypt.hashSync(seedPw, 10);
     const ins = "INSERT INTO users (username,password,name,role,emoji) VALUES (?,?,?,?,?)";
     await q(ins, ["razib", hash, "Razib", "Owner",   "👑"]);
     await q(ins, ["fahad", hash, "Fahad", "Manager", "🧑‍💼"]);
@@ -669,15 +672,42 @@ const maskSecrets = (obj={}) => {
     out[k] = (SECRET_FIELDS.has(k) && val) ? SECRET_MASK : val;
   return out;
 };
+
+// Encryption at rest for integration secrets (AES-256-GCM). Key derived from
+// SETTINGS_ENC_KEY, else AUTH_SECRET. Legacy plaintext values decrypt as-is.
+const ENC_KEY = crypto.createHash("sha256")
+  .update(process.env.SETTINGS_ENC_KEY || process.env.AUTH_SECRET || "dev-insecure-key").digest();
+function encryptSecret(plain) {
+  if (plain === undefined || plain === null || plain === "") return plain;
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv("aes-256-gcm", ENC_KEY, iv);
+  const ct = Buffer.concat([c.update(String(plain), "utf8"), c.final()]);
+  return "enc:" + iv.toString("base64") + ":" + c.getAuthTag().toString("base64") + ":" + ct.toString("base64");
+}
+function decryptSecret(blob) {
+  if (typeof blob !== "string" || !blob.startsWith("enc:")) return blob; // legacy plaintext / empty
+  try {
+    const [, iv, tag, ct] = blob.split(":");
+    const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, Buffer.from(iv, "base64"));
+    d.setAuthTag(Buffer.from(tag, "base64"));
+    return Buffer.concat([d.update(Buffer.from(ct, "base64")), d.final()]).toString("utf8");
+  } catch { return ""; }
+}
 async function readSetting(tenant_id, key) {
   const [[row]] = await q("SELECT v FROM settings WHERE tenant_id=? AND k=?", [tenant_id, key]);
   try { return row ? JSON.parse(row.v) : {}; } catch { return {}; }
+}
+// Read a setting with its secret fields decrypted (for actually calling the API)
+async function readSettingForUse(tenant_id, key) {
+  const s = await readSetting(tenant_id, key);
+  for (const k of Object.keys(s)) if (SECRET_FIELDS.has(k)) s[k] = decryptSecret(s[k]);
+  return s;
 }
 // Build integration configs for a tenant. Empty fields fall through to env vars
 // inside pathao.js / woocommerce.js, so thc (no settings row) keeps using .env.
 const nz = (v) => (v === "" || v === null || v === undefined ? undefined : v);
 async function pathaoConfig(tenant_id) {
-  const s = await readSetting(tenant_id, "pathao");
+  const s = await readSettingForUse(tenant_id, "pathao");
   return {
     base_url: nz(s.base_url), client_id: nz(s.client_id), client_secret: nz(s.client_secret),
     username: nz(s.username), password: nz(s.password), store_id: nz(s.store_id),
@@ -686,7 +716,7 @@ async function pathaoConfig(tenant_id) {
   };
 }
 async function wcConfig(tenant_id) {
-  const s = await readSetting(tenant_id, "woocommerce");
+  const s = await readSettingForUse(tenant_id, "woocommerce");
   return { url: nz(s.url), key: nz(s.key), secret: nz(s.secret), webhook_secret: nz(s.webhook_secret) };
 }
 app.get("/api/settings", requireRole("Owner"), async (req, res) => {
@@ -708,9 +738,12 @@ app.put("/api/settings/:key", requireRole("Owner"), async (req, res) => {
     const incoming = req.body && typeof req.body === "object" ? req.body : {};
     const merged = { ...existing };
     for (const [k, val] of Object.entries(incoming)) {
-      // Keep the stored secret if the client sent back the mask sentinel
-      if (SECRET_FIELDS.has(k) && val === SECRET_MASK) continue;
-      merged[k] = val;
+      if (SECRET_FIELDS.has(k)) {
+        if (val === SECRET_MASK) continue;      // client kept the stored secret
+        merged[k] = encryptSecret(val);          // encrypt new secret at rest
+      } else {
+        merged[k] = val;
+      }
     }
     await tq(req,
       "INSERT INTO settings (tenant_id,k,v) VALUES (?,?,?) ON DUPLICATE KEY UPDATE v=VALUES(v)",
@@ -1199,7 +1232,7 @@ app.post("/api/orders/public", async (req, res) => {
     const t   = tnt?.id || 1;
 
     // Resolve product name from DB if product_id provided (scoped to the workspace)
-    let product_name = req.body.product_name || "Order";
+    let product_name = clean(req.body.product_name, 200) || "Order";
     if (product_id) {
       const [[prod]] = await tq(req, "SELECT name FROM products WHERE id=? AND tenant_id=?", [product_id, t]);
       if (prod) product_name = prod.name;
@@ -1763,7 +1796,7 @@ app.post("/api/webhook/pathao", async (req, res) => {
 
     // Require the tenant's shared secret. Fail closed if none is configured —
     // a forged "cancelled" would otherwise delete the linked sale.
-    const secret = (await readSetting(t, "pathao")).webhook_secret || process.env.PATHAO_WEBHOOK_SECRET;
+    const secret = (await readSettingForUse(t, "pathao")).webhook_secret || process.env.PATHAO_WEBHOOK_SECRET;
     if (!secret) {
       console.warn(`🚫 Pathao webhook rejected: no secret configured for tenant ${tenant.slug}`);
       return res.status(401).json({ error: "Webhook not configured" });
