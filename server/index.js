@@ -477,12 +477,37 @@ app.use("/api", (req, res, next) => {
   const user = verifyToken(token);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
   req.user = user;
+  // Tenant scope comes from the signed token — a tenant's token can never be
+  // pointed at another tenant's data by tampering with the URL.
+  req.tenant_id = user.tenant_id || 1;
   next();
 });
 function requireRole(...roles) {
   return (req, res, next) =>
     roles.includes(req.user?.role) ? next() : res.status(403).json({ error: "Forbidden" });
 }
+
+// ── TENANT SCOPE (Phase 2) ────────────────────────────────────────────────────
+// Every business query must be filtered by tenant. tq() is a guardrail: it refuses
+// to run a query that has no tenant_id predicate, so a scope can't be forgotten.
+// Callers pass tenantId(req) in the params. See docs/SAAS-ARCHITECTURE.md.
+const tenantId = (req) => (req && req.tenant_id) || 1;
+function tq(req, sql, params = []) {
+  if (!/tenant_id/i.test(sql))
+    throw new Error("tq(): query is missing a tenant_id scope → " + sql.slice(0, 80));
+  return q(sql, params);
+}
+// Resolve a workspace slug (X-Tenant header / body / default 'thc') to a tenant row.
+const _tenantCache = new Map();
+async function tenantBySlug(slug) {
+  if (!slug) return null;
+  if (_tenantCache.has(slug)) return _tenantCache.get(slug);
+  const [[row]] = await q("SELECT id, slug, status FROM tenants WHERE slug=?", [slug]);
+  if (row) _tenantCache.set(slug, row);
+  return row || null;
+}
+const resolveSlug = (req) =>
+  (req.headers["x-tenant"] || req.body?.tenant || "thc").toString().toLowerCase().trim();
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 app.post("/api/login", async (req, res) => {
@@ -495,11 +520,17 @@ app.post("/api/login", async (req, res) => {
       return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-    const [[user]] = await q("SELECT * FROM users WHERE username = ?", [username.toLowerCase().trim()]);
+    // Resolve which workspace this login is for (defaults to 'thc' today)
+    const tenant = await tenantBySlug(resolveSlug(req));
+    if (!tenant || tenant.status !== "active")
+      return res.status(400).json({ error: "Unknown or inactive workspace" });
+    // Look up the user WITHIN that tenant — usernames are unique per-tenant
+    const [[user]] = await q("SELECT * FROM users WHERE tenant_id = ? AND username = ?",
+      [tenant.id, username.toLowerCase().trim()]);
     if (!user || !bcrypt.compareSync(password, user.password))
       return res.status(401).json({ error: "Invalid username or password" });
-    const token = signToken({ id: user.id, role: user.role, username: user.username });
-    res.json({ token, id: user.id, username: user.username, name: user.name, role: user.role, emoji: user.emoji });
+    const token = signToken({ id: user.id, role: user.role, username: user.username, tenant_id: tenant.id });
+    res.json({ token, id: user.id, username: user.username, name: user.name, role: user.role, emoji: user.emoji, tenant_id: tenant.id, tenant: tenant.slug });
   } catch(e) { res.status(500).json({ error: "Login failed" }); }
 });
 
@@ -640,8 +671,8 @@ app.delete("/api/products/:id", async (req, res) => {
 });
 
 // ── SALES ────────────────────────────────────────────────────────────────────
-app.get("/api/sales", async (_, res) => {
-  const [rows] = await q("SELECT * FROM sales ORDER BY id DESC");
+app.get("/api/sales", async (req, res) => {
+  const [rows] = await tq(req, "SELECT * FROM sales WHERE tenant_id=? ORDER BY id DESC", [tenantId(req)]);
   res.json(rows.map(r=>({...r,
     date: r.date?.toISOString?.().split("T")[0] || r.date,
     price: +r.price, buy_price: +r.buy_price, total: +r.total, profit: +r.profit, qty: +r.qty,
@@ -649,21 +680,26 @@ app.get("/api/sales", async (_, res) => {
   })));
 });
 app.post("/api/sales", async (req, res) => {
-  const s = req.body;
-  const [r] = await q(
-    "INSERT INTO sales (inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,phone,address,payment,sold_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    [s.inv,s.date,s.time,s.productId||null,s.productName,s.emoji||"🧸",s.qty,s.price,s.buyPrice||0,s.total,s.profit||0,s.customer||"Walk-in",s.phone||"",s.address||"",s.payment||"Cash",s.soldBy||""]);
-  await q("UPDATE products SET stock = stock - ? WHERE id = ?", [s.qty, s.productId]);
-  await logStockChange(s.productId, -s.qty, "sale", s.inv, s.soldBy||"");
-  res.json({ ...s, id: r.insertId });
+  try {
+    const s = req.body, t = tenantId(req);
+    const [r] = await tq(req,
+      "INSERT INTO sales (tenant_id,inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,phone,address,payment,sold_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [t,s.inv,s.date,s.time,s.productId||null,s.productName,s.emoji||"🧸",s.qty,s.price,s.buyPrice||0,s.total,s.profit||0,s.customer||"Walk-in",s.phone||"",s.address||"",s.payment||"Cash",s.soldBy||""]);
+    // Only touch stock for product-backed sales (walk-in/custom sales carry no product_id)
+    if (s.productId) {
+      await tq(req, "UPDATE products SET stock = stock - ? WHERE id = ? AND tenant_id=?", [s.qty, s.productId, t]);
+      await logStockChange(s.productId, -s.qty, "sale", s.inv, s.soldBy||"");
+    }
+    res.json({ ...s, id: r.insertId });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.put("/api/sales/:id", async (req, res) => {
   try {
     const s = req.body;
-    await q(
-      "UPDATE sales SET product_name=?,qty=?,price=?,total=?,profit=?,customer=?,payment=?,date=? WHERE id=?",
-      [s.product_name, +s.qty, +s.price, +s.total, +s.profit, s.customer, s.payment, s.date, req.params.id]
+    await tq(req,
+      "UPDATE sales SET product_name=?,qty=?,price=?,total=?,profit=?,customer=?,payment=?,date=? WHERE id=? AND tenant_id=?",
+      [s.product_name, +s.qty, +s.price, +s.total, +s.profit, s.customer, s.payment, s.date, req.params.id, tenantId(req)]
     );
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -671,13 +707,14 @@ app.put("/api/sales/:id", async (req, res) => {
 
 app.delete("/api/sales/:id", async (req, res) => {
   try {
-    // Get sale first to restore stock
-    const [[sale]] = await q("SELECT * FROM sales WHERE id=?", [req.params.id]);
+    const t = tenantId(req);
+    // Get sale first to restore stock — scoped so one tenant can't delete another's sale
+    const [[sale]] = await tq(req, "SELECT * FROM sales WHERE id=? AND tenant_id=?", [req.params.id, t]);
     if (sale && sale.product_id) {
-      await q("UPDATE products SET stock = stock + ? WHERE id=?", [sale.qty, sale.product_id]);
+      await tq(req, "UPDATE products SET stock = stock + ? WHERE id=? AND tenant_id=?", [sale.qty, sale.product_id, t]);
       await logStockChange(sale.product_id, +sale.qty, "sale_deleted", sale.inv, "");
     }
-    await q("DELETE FROM sales WHERE id=?", [req.params.id]);
+    await tq(req, "DELETE FROM sales WHERE id=? AND tenant_id=?", [req.params.id, t]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
