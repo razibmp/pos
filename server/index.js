@@ -403,15 +403,15 @@ async function migrateTenants() {
 
 
 // ── STOCK HISTORY HELPER ──────────────────────────────────────────────────────
-async function logStockChange(product_id, change_qty, reason, ref="", changed_by="") {
+async function logStockChange(product_id, change_qty, reason, ref="", changed_by="", tenant_id=1) {
   try {
-    const [[prod]] = await q("SELECT name, stock FROM products WHERE id=?", [product_id]);
+    const [[prod]] = await q("SELECT name, stock FROM products WHERE id=? AND tenant_id=?", [product_id, tenant_id]);
     if (!prod) return;
     const old_stock = +prod.stock;
     const new_stock = old_stock + change_qty;
     await q(
-      "INSERT INTO stock_history (product_id,product_name,change_qty,old_stock,new_stock,reason,ref,changed_by) VALUES (?,?,?,?,?,?,?,?)",
-      [product_id, prod.name, change_qty, old_stock, new_stock, reason, ref, changed_by]
+      "INSERT INTO stock_history (tenant_id,product_id,product_name,change_qty,old_stock,new_stock,reason,ref,changed_by) VALUES (?,?,?,?,?,?,?,?,?)",
+      [tenant_id, product_id, prod.name, change_qty, old_stock, new_stock, reason, ref, changed_by]
     );
   } catch(e) { console.error("Stock log error:", e.message); }
 }
@@ -644,29 +644,29 @@ app.delete("/api/categories/:id", async (req, res) => {
 });
 
 // ── PRODUCTS ─────────────────────────────────────────────────────────────────
-app.get("/api/products", async (_, res) => {
-  const [rows] = await q("SELECT * FROM products ORDER BY id DESC");
+app.get("/api/products", async (req, res) => {
+  const [rows] = await tq(req, "SELECT * FROM products WHERE tenant_id=? ORDER BY id DESC", [tenantId(req)]);
   res.json(rows.map(r=>({...r, buy: +r.buy, sell: +r.sell, stock: +r.stock, low: +r.low})));
 });
 app.post("/api/products", async (req, res) => {
-  const p = req.body;
-  const [r] = await q("INSERT INTO products (name,cat,buy,sell,stock,low,emoji,brand) VALUES (?,?,?,?,?,?,?,?)",
-    [p.name, p.cat, p.buy, p.sell, p.stock, p.low||5, p.emoji||"🧸", p.brand||""]);
+  const p = req.body, t = tenantId(req);
+  const [r] = await tq(req, "INSERT INTO products (tenant_id,name,cat,buy,sell,stock,low,emoji,brand) VALUES (?,?,?,?,?,?,?,?,?)",
+    [t, p.name, p.cat, p.buy, p.sell, p.stock, p.low||5, p.emoji||"🧸", p.brand||""]);
   res.json({ ...p, id: r.insertId });
 });
 app.put("/api/products/:id", async (req, res) => {
-  const p = req.body;
-  const [[old]] = await q("SELECT stock FROM products WHERE id=?", [req.params.id]);
-  await q("UPDATE products SET name=?,cat=?,buy=?,sell=?,stock=?,low=?,emoji=?,brand=? WHERE id=?",
-    [p.name, p.cat, p.buy, p.sell, p.stock, p.low, p.emoji, p.brand, req.params.id]);
+  const p = req.body, t = tenantId(req);
+  const [[old]] = await tq(req, "SELECT stock FROM products WHERE id=? AND tenant_id=?", [req.params.id, t]);
+  await tq(req, "UPDATE products SET name=?,cat=?,buy=?,sell=?,stock=?,low=?,emoji=?,brand=? WHERE id=? AND tenant_id=?",
+    [p.name, p.cat, p.buy, p.sell, p.stock, p.low, p.emoji, p.brand, req.params.id, t]);
   if (old && +old.stock !== +p.stock) {
     const diff = +p.stock - +old.stock;
-    await logStockChange(req.params.id, diff, "manual_adjustment", "", p.updated_by||"");
+    await logStockChange(req.params.id, diff, "manual_adjustment", "", p.updated_by||"", t);
   }
   res.json({ ok: true });
 });
 app.delete("/api/products/:id", async (req, res) => {
-  await q("DELETE FROM products WHERE id=?", [req.params.id]);
+  await tq(req, "DELETE FROM products WHERE id=? AND tenant_id=?", [req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 
@@ -688,7 +688,7 @@ app.post("/api/sales", async (req, res) => {
     // Only touch stock for product-backed sales (walk-in/custom sales carry no product_id)
     if (s.productId) {
       await tq(req, "UPDATE products SET stock = stock - ? WHERE id = ? AND tenant_id=?", [s.qty, s.productId, t]);
-      await logStockChange(s.productId, -s.qty, "sale", s.inv, s.soldBy||"");
+      await logStockChange(s.productId, -s.qty, "sale", s.inv, s.soldBy||"", t);
     }
     res.json({ ...s, id: r.insertId });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -712,7 +712,7 @@ app.delete("/api/sales/:id", async (req, res) => {
     const [[sale]] = await tq(req, "SELECT * FROM sales WHERE id=? AND tenant_id=?", [req.params.id, t]);
     if (sale && sale.product_id) {
       await tq(req, "UPDATE products SET stock = stock + ? WHERE id=? AND tenant_id=?", [sale.qty, sale.product_id, t]);
-      await logStockChange(sale.product_id, +sale.qty, "sale_deleted", sale.inv, "");
+      await logStockChange(sale.product_id, +sale.qty, "sale_deleted", sale.inv, "", t);
     }
     await tq(req, "DELETE FROM sales WHERE id=? AND tenant_id=?", [req.params.id, t]);
     res.json({ ok: true });
@@ -975,11 +975,12 @@ app.get("/api/stock-history", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const product_id = req.query.product_id ? parseInt(req.query.product_id) : null;
+    const t = tenantId(req);
     let rows;
     if (product_id) {
-      [rows] = await q(`SELECT * FROM stock_history WHERE product_id=? ORDER BY id DESC LIMIT ${limit}`, [product_id]);
+      [rows] = await tq(req, `SELECT * FROM stock_history WHERE tenant_id=? AND product_id=? ORDER BY id DESC LIMIT ${limit}`, [t, product_id]);
     } else {
-      [rows] = await q(`SELECT * FROM stock_history ORDER BY id DESC LIMIT ${limit}`, []);
+      [rows] = await tq(req, `SELECT * FROM stock_history WHERE tenant_id=? ORDER BY id DESC LIMIT ${limit}`, [t]);
     }
     res.json(rows.map(r=>({...r, created_at: r.created_at?.toISOString?.().replace("T"," ").slice(0,16)||r.created_at})));
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -1047,9 +1048,11 @@ app.get("/api/payouts/unpaid", async (req, res) => {
 // ── PUBLIC ORDER FORM ─────────────────────────────────────────────────────────
 // Saves to pending_orders — awaits approval before Pathao is created
 // Public product list for the order form (only in-stock items)
-app.get("/api/products/public", async (_, res) => {
+app.get("/api/products/public", async (req, res) => {
   try {
-    const [rows] = await q("SELECT id, name, emoji, sell, stock FROM products WHERE stock > 0 ORDER BY name");
+    const tenant = await tenantBySlug(resolveSlug(req));
+    const t = tenant?.id || 1;
+    const [rows] = await tq(req, "SELECT id, name, emoji, sell, stock FROM products WHERE tenant_id=? AND stock > 0 ORDER BY name", [t]);
     res.json(rows.map(r => ({ ...r, sell: +r.sell, stock: +r.stock })));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

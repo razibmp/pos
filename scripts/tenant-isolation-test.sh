@@ -1,39 +1,71 @@
 #!/usr/bin/env bash
-# Two-tenant isolation test (Phase 2). Proves that a tenant's token can only
-# ever see/modify that tenant's rows. Run against a running stack:
+# Two-tenant isolation test (Phase 2). Proves a tenant's token can only ever
+# see/modify that tenant's rows, for every converted module.
 #
 #   BASE=http://localhost ./scripts/tenant-isolation-test.sh
 #
-# Requires: a 'thc' tenant (razib/1234) and an 'apple' tenant (tim/apple1234).
+# Self-contained: provisions two THROWAWAY tenants (isotest_a / isotest_b),
+# runs the checks, then deletes them — it never touches real tenant data.
+# Requires the docker compose stack (uses the mysql + api containers to seed).
 # Exits non-zero on any isolation failure so it can gate CI.
 set -euo pipefail
 BASE="${BASE:-http://localhost}"
+DB(){ docker compose exec -T mysql mysql -uhcuser -pdevpass hobbycenter "$@"; }
+
 fail(){ echo "❌ FAIL: $1"; exit 1; }
-tok(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).token||'')}catch{process.stdout.write('')}})"; }
+tok(){  node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).token||'')}catch{process.stdout.write('')}})"; }
 invs(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a.map(x=>x.inv).sort().join(','))})"; }
+names(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a.map(x=>x.name).sort().join(','))})"; }
+first_id(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(String(JSON.parse(s)[0].id)))"; }
 
-T_THC=$(curl -s -X POST "$BASE/api/login" -H "Content-Type: application/json" -d '{"username":"razib","password":"1234"}' | tok)
-T_APL=$(curl -s -X POST "$BASE/api/login" -H "Content-Type: application/json" -H "X-Tenant: apple" -d '{"username":"tim","password":"apple1234"}' | tok)
-[ -n "$T_THC" ] || fail "thc login"
-[ -n "$T_APL" ] || fail "apple login"
+teardown(){
+  DB -e "DELETE x FROM sales x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM products x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM stock_history x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM users x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE FROM tenants WHERE slug LIKE 'isotest\_%';" >/dev/null 2>&1 || true
+}
+trap teardown EXIT
 
-# Same username must not cross tenants (tim only exists in apple)
-code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/login" -H "Content-Type: application/json" -d '{"username":"tim","password":"apple1234"}')
-[ "$code" = "401" ] || fail "tim should not authenticate against default tenant (got $code)"
+seed(){ # $1 = slug
+  local hash; hash=$(docker compose exec -T api node -e "console.log(require('bcryptjs').hashSync('pw1234',10))")
+  DB -e "INSERT INTO tenants (slug,name,status,plan) VALUES ('$1','$1','active','free');
+         SET @t:=(SELECT id FROM tenants WHERE slug='$1');
+         INSERT INTO users (tenant_id,username,password,name,role,emoji) VALUES (@t,'owner','$hash','O','Owner','🧪');" >/dev/null 2>&1
+}
 
-# Each tenant records a sale
-curl -s -X POST "$BASE/api/sales" -H "Authorization: Bearer $T_APL" -H "Content-Type: application/json" \
-  -d '{"inv":"ISO-APL","date":"2026-01-01","time":"10:00","productName":"Case","qty":1,"price":500,"total":500}' >/dev/null
-curl -s -X POST "$BASE/api/sales" -H "Authorization: Bearer $T_THC" -H "Content-Type: application/json" \
-  -d '{"inv":"ISO-THC","date":"2026-01-01","time":"11:00","productName":"LEGO","qty":1,"price":2000,"total":2000}' >/dev/null
+teardown            # clean any leftovers from a prior aborted run
+seed isotest_a
+seed isotest_b
+TA=$(curl -s -X POST "$BASE/api/login" -H "Content-Type: application/json" -H "X-Tenant: isotest_a" -d '{"username":"owner","password":"pw1234"}' | tok)
+TB=$(curl -s -X POST "$BASE/api/login" -H "Content-Type: application/json" -H "X-Tenant: isotest_b" -d '{"username":"owner","password":"pw1234"}' | tok)
+[ -n "$TA" ] || fail "tenant A login"
+[ -n "$TB" ] || fail "tenant B login"
 
-# Each tenant must see ONLY its own sale
-[ "$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $T_APL" | invs)" = "ISO-APL" ] || fail "apple sees foreign sales"
-[ "$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $T_THC" | invs)" = "ISO-THC" ] || fail "thc sees foreign sales"
+# Same username 'owner' exists in both tenants, but must not cross the default tenant
+code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/login" -H "Content-Type: application/json" -d '{"username":"owner","password":"pw1234"}')
+[ "$code" = "401" ] || fail "owner should not authenticate against default tenant (got $code)"
 
-# Cross-tenant delete must not remove the other tenant's data
-APL_ID=$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $T_APL" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(String(JSON.parse(s)[0].id)))")
-curl -s -X DELETE "$BASE/api/sales/$APL_ID" -H "Authorization: Bearer $T_THC" >/dev/null
-[ "$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $T_APL" | invs)" = "ISO-APL" ] || fail "cross-tenant delete removed apple's data"
+# ── SALES ─────────────────────────────────────────────────────────────────────
+curl -s -X POST "$BASE/api/sales" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" \
+  -d '{"inv":"ISO-A","date":"2026-01-01","time":"10:00","productName":"Case","qty":1,"price":500,"total":500}' >/dev/null
+curl -s -X POST "$BASE/api/sales" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" \
+  -d '{"inv":"ISO-B","date":"2026-01-01","time":"11:00","productName":"LEGO","qty":1,"price":2000,"total":2000}' >/dev/null
+[ "$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $TA" | invs)" = "ISO-A" ] || fail "A sees foreign sales"
+[ "$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $TB" | invs)" = "ISO-B" ] || fail "B sees foreign sales"
+A_SALE=$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/sales/$A_SALE" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/sales" -H "Authorization: Bearer $TA" | invs)" = "ISO-A" ] || fail "cross-tenant delete removed A's sale"
 
-echo "✅ PASS — tenant isolation holds for the sales module"
+# ── PRODUCTS ──────────────────────────────────────────────────────────────────
+curl -s -X POST "$BASE/api/products" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" \
+  -d '{"name":"ISO-AWidget","cat":"Other","buy":10,"sell":20,"stock":5}' >/dev/null
+curl -s -X POST "$BASE/api/products" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" \
+  -d '{"name":"ISO-BBlock","cat":"Other","buy":100,"sell":200,"stock":3}' >/dev/null
+[ "$(curl -s "$BASE/api/products" -H "Authorization: Bearer $TA" | names)" = "ISO-AWidget" ] || fail "A sees foreign products"
+[ "$(curl -s "$BASE/api/products" -H "Authorization: Bearer $TB" | names)" = "ISO-BBlock" ] || fail "B sees foreign products"
+A_PROD=$(curl -s "$BASE/api/products" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/products/$A_PROD" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/products" -H "Authorization: Bearer $TA" | names)" = "ISO-AWidget" ] || fail "cross-tenant delete removed A's product"
+
+echo "✅ PASS — tenant isolation holds for the sales + products modules"
