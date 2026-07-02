@@ -425,6 +425,7 @@ async function logStockChange(product_id, change_qty, reason, ref="", changed_by
 // ── RATE LIMITER ──────────────────────────────────────────────────────────────
 const _loginAttempts = new Map();
 const _publicOrderAttempts = new Map();
+const _signupAttempts = new Map();
 function rateCheck(map, key, max, windowMs) {
   const now = Date.now();
   let e = map.get(key) || { n: 0, reset: now + windowMs };
@@ -436,7 +437,7 @@ function rateCheck(map, key, max, windowMs) {
 // Periodic cleanup so the maps don't grow unbounded
 setInterval(() => {
   const now = Date.now();
-  for (const m of [_loginAttempts, _publicOrderAttempts]) {
+  for (const m of [_loginAttempts, _publicOrderAttempts, _signupAttempts]) {
     for (const [k, v] of m) if (now > v.reset) m.delete(k);
   }
 }, 30 * 60 * 1000).unref?.();
@@ -474,6 +475,7 @@ const PUBLIC_API = new Set([
   "/webhook/pathao",
   "/health",
   "/tenant",          // public workspace lookup (login-screen branding)
+  "/signup",          // public self-serve workspace signup (rate-limited)
   "/admin/tenants",   // platform-admin routes: guarded by X-Admin-Token, not a user JWT
 ]);
 // Guard: every /api route requires a valid token unless explicitly public
@@ -505,34 +507,58 @@ function requirePlatformAdmin(req, res, next) {
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(403).json({ error: "Forbidden" });
   next();
 }
+// Shared provisioning: create a tenant + seed categories + Owner user, atomically
+// enough for our needs. Throws {code, msg} on validation/conflict.
+const RESERVED_SLUGS = new Set(["api","assets","order","admin","webhook","www","app","thc"]);
+async function provisionTenant({ slug, name, ownerUsername, ownerPassword, plan, status="active" }) {
+  slug = (slug || "").toLowerCase().trim();
+  if (!/^[a-z0-9-]{2,40}$/.test(slug)) throw { code: 400, msg: "Workspace URL must be 2–40 chars: a–z, 0–9, hyphen" };
+  if (RESERVED_SLUGS.has(slug)) throw { code: 409, msg: "That workspace URL is reserved" };
+  if (!ownerUsername || !ownerPassword) throw { code: 400, msg: "Username and password are required" };
+  const pwErr = validatePassword(ownerPassword);
+  if (pwErr) throw { code: 400, msg: pwErr };
+  const [[dupe]] = await q("SELECT id FROM tenants WHERE slug=?", [slug]);
+  if (dupe) throw { code: 409, msg: "That workspace URL is already taken" };
+  const [r] = await q("INSERT INTO tenants (slug,name,status,plan) VALUES (?,?,?,?)",
+    [slug, name || slug, status, plan || "free"]);
+  const tid = r.insertId;
+  for (const [n, e] of DEFAULT_CATEGORIES)
+    await q("INSERT INTO categories (tenant_id,name,emoji) VALUES (?,?,?)", [tid, n, e]);
+  const uname = ownerUsername.toLowerCase().trim();
+  const hash = bcrypt.hashSync(ownerPassword, 10);
+  const [ur] = await q("INSERT INTO users (tenant_id,username,password,name,role,emoji) VALUES (?,?,?,?,?,?)",
+    [tid, uname, hash, name || "Owner", "Owner", "👑"]);
+  _tenantCache.delete(slug);   // drop any stale cache entry for this slug
+  console.log(`✅ Provisioned tenant '${slug}' (id=${tid})`);
+  return { id: tid, ownerId: ur.insertId, username: uname };
+}
+
 app.get("/api/admin/tenants", requirePlatformAdmin, async (_req, res) => {
   const [rows] = await q("SELECT id, slug, name, status, plan, created_at FROM tenants ORDER BY id");
   res.json(rows);
 });
-// Create a new tenant + its Owner user in one shot (the "few minutes" flow)
+// Admin-provisioning (token-gated)
 app.post("/api/admin/tenants", requirePlatformAdmin, async (req, res) => {
-  const { slug, name, ownerUsername, ownerPassword, plan } = req.body || {};
-  if (!/^[a-z0-9-]{2,40}$/.test(slug || ""))
-    return res.status(400).json({ error: "slug must be 2–40 chars: a–z, 0–9, hyphen" });
-  if (!ownerUsername || !ownerPassword)
-    return res.status(400).json({ error: "ownerUsername and ownerPassword required" });
-  const pwErr = validatePassword(ownerPassword);
-  if (pwErr) return res.status(400).json({ error: pwErr });
   try {
-    const [[dupe]] = await q("SELECT id FROM tenants WHERE slug=?", [slug]);
-    if (dupe) return res.status(409).json({ error: "Workspace slug already exists" });
-    const [r] = await q("INSERT INTO tenants (slug,name,status,plan) VALUES (?,?,?,?)",
-      [slug, name || slug, "active", plan || "free"]);
-    const tid = r.insertId;
-    for (const [n, e] of DEFAULT_CATEGORIES)
-      await q("INSERT INTO categories (tenant_id,name,emoji) VALUES (?,?,?)", [tid, n, e]);
-    const hash = bcrypt.hashSync(ownerPassword, 10);
-    await q("INSERT INTO users (tenant_id,username,password,name,role,emoji) VALUES (?,?,?,?,?,?)",
-      [tid, ownerUsername.toLowerCase().trim(), hash, name || "Owner", "Owner", "👑"]);
-    _tenantCache.delete(slug);   // drop any stale cache entry for this slug
-    console.log(`✅ Provisioned tenant '${slug}' (id=${tid})`);
-    res.json({ ok: true, id: tid, slug, loginUrl: `/${slug}` });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const { slug, name, ownerUsername, ownerPassword, plan } = req.body || {};
+    const prov = await provisionTenant({ slug, name, ownerUsername, ownerPassword, plan });
+    res.json({ ok: true, id: prov.id, slug: (slug||"").toLowerCase().trim(), loginUrl: `/${(slug||"").toLowerCase().trim()}` });
+  } catch (e) { res.status(e.code || 500).json({ error: e.msg || e.message }); }
+});
+
+// Self-serve signup — public, rate-limited. Creates the workspace and auto-logs in.
+app.post("/api/signup", async (req, res) => {
+  try {
+    const ip = req.ip || "unknown";
+    if (rateCheck(_signupAttempts, ip, 5, 60 * 60 * 1000))
+      return res.status(429).json({ error: "Too many signups from this network. Try again later." });
+    const { slug, name, ownerUsername, ownerPassword } = req.body || {};
+    const prov = await provisionTenant({ slug, name, ownerUsername, ownerPassword, plan: "free", status: "active" });
+    const s = (slug || "").toLowerCase().trim();
+    const token = signToken({ id: prov.ownerId, role: "Owner", username: prov.username, tenant_id: prov.id });
+    res.json({ ok: true, token, id: prov.ownerId, username: prov.username, name: name || "Owner",
+      role: "Owner", emoji: "👑", tenant_id: prov.id, tenant: s, slug: s });
+  } catch (e) { res.status(e.code || 500).json({ error: e.msg || e.message }); }
 });
 
 // ── TENANT SCOPE (Phase 2) ────────────────────────────────────────────────────

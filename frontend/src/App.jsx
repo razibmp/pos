@@ -141,14 +141,28 @@ const Btn=({children,variant="primary",...p})=>{
 const Empty=({msg})=><div style={{textAlign:"center",color:"#AEAEB2",padding:"28px 0",fontSize:13,fontWeight:500}}>{msg}</div>;
 const TH=({cols})=><tr style={{borderBottom:"1px solid #F2F2F7"}}>{cols.map((h,i)=><th key={i} style={{textAlign:"left",padding:"9px 12px",fontSize:11,fontWeight:600,color:"#6E6E73",letterSpacing:"-.01em",whiteSpace:"nowrap",background:"#FAFAFA"}}>{h}</th>)}</tr>;
 
-// ── LOGIN ────────────────────────────────────────────────────────────────────
+// ── LOGIN / SIGNUP ───────────────────────────────────────────────────────────
+const slugify=(s)=>(s||"").toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,40);
 function Login({onLogin,brand}){
+  const [mode,setMode]=useState("signin");
   const [un,setUN]=useState("");const [pw,setPW]=useState("");const [err,setErr]=useState("");const [loading,setLoading]=useState(false);
+  // signup-only fields
+  const [biz,setBiz]=useState("");const [slug,setSlug]=useState("");const [slugEdited,setSlugEdited]=useState(false);
+  const signup=mode==="signup";
+  const onBiz=(v)=>{setBiz(v);setErr("");if(!slugEdited)setSlug(slugify(v));};
   const submit=async()=>{
     setLoading(true);setErr("");
-    try{const u=await API.login({username:un.trim().toLowerCase(),password:pw});onLogin(u);}
-    catch(e){setErr(e.message);}
-    finally{setLoading(false);}
+    try{
+      if(signup){
+        if(!biz.trim()||!slug||!un.trim()||!pw){setErr("Fill in all fields");setLoading(false);return;}
+        const r=await API.signup({slug,name:biz.trim(),ownerUsername:un.trim().toLowerCase(),ownerPassword:pw});
+        API.storeAuthFor(r.slug,r);               // persist auto-login under the new workspace
+        window.location.assign("/"+r.slug);       // land on the new workspace, logged in
+      }else{
+        const u=await API.login({username:un.trim().toLowerCase(),password:pw});onLogin(u);
+      }
+    }
+    catch(e){setErr(e.message);setLoading(false);}
   };
   return <div style={{minHeight:"100vh",background:"#F5F5F7",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px",position:"relative"}}>
     <div style={{position:"relative",zIndex:1,width:"100%",display:"flex",flexDirection:"column",alignItems:"center"}}>
@@ -159,17 +173,28 @@ function Login({onLogin,brand}){
         {/* Brand header */}
         <div className="login-hd" style={{background:"linear-gradient(135deg,#FF6B35 0%,#FF8C42 100%)",display:"flex",flexDirection:"column",alignItems:"center"}}>
           <div style={{width:68,height:68,borderRadius:"50%",background:"rgba(255,255,255,.2)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,.4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:34,marginBottom:14}}>🎮</div>
-          <div style={{fontSize:20,fontWeight:700,color:"#fff",letterSpacing:"-.02em",textAlign:"center"}}>{brand||"The Hobby Center"}</div>
-          <div style={{fontSize:12,color:"rgba(255,255,255,.75)",fontWeight:500,marginTop:5,letterSpacing:".01em",textAlign:"center"}}>Management Dashboard</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#fff",letterSpacing:"-.02em",textAlign:"center"}}>{signup?"Create your workspace":(brand||"The Hobby Center")}</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.75)",fontWeight:500,marginTop:5,letterSpacing:".01em",textAlign:"center"}}>{signup?"Up and running in under a minute":"Management Dashboard"}</div>
         </div>
         {/* Form */}
         <div className="login-bd" style={{background:"#fff"}}>
-          <div style={{marginBottom:18,fontSize:15,fontWeight:600,color:"#1D1D1F"}}>Sign in to your account</div>
+          <div style={{marginBottom:18,fontSize:15,fontWeight:600,color:"#1D1D1F"}}>{signup?"Start a new business account":"Sign in to your account"}</div>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
-            <FI label="Username" value={un} onChange={e=>{setUN(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter username" autoCapitalize="none" autoComplete="username"/>
-            <FI label="Password" type="password" value={pw} onChange={e=>{setPW(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter password" autoComplete="current-password"/>
+            {signup&&<>
+              <FI label="Business name" value={biz} onChange={e=>onBiz(e.target.value)} placeholder="e.g. Apple Store BD"/>
+              <div>
+                <FI label="Workspace URL" value={slug} onChange={e=>{setSlugEdited(true);setSlug(slugify(e.target.value));setErr("")}} placeholder="apple" autoCapitalize="none"/>
+                <div style={{fontSize:11,color:"#8E8E93",marginTop:4}}>Your dashboard will live at <b>/{slug||"your-workspace"}</b></div>
+              </div>
+            </>}
+            <FI label={signup?"Choose a username":"Username"} value={un} onChange={e=>{setUN(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter username" autoCapitalize="none" autoComplete="username"/>
+            <FI label={signup?"Choose a password (min 6 chars)":"Password"} type="password" value={pw} onChange={e=>{setPW(e.target.value);setErr("")}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter password" autoComplete={signup?"new-password":"current-password"}/>
             {err&&<div style={{background:"#FEF2F2",color:"#DC2626",borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,textAlign:"center",border:"1px solid #FECACA"}}>⚠️ {err}</div>}
-            <button onClick={submit} disabled={loading} style={{width:"100%",fontSize:15,fontWeight:700,padding:"14px",marginTop:2,borderRadius:12,border:"none",cursor:loading?"not-allowed":"pointer",background:"linear-gradient(135deg,#FF6B35,#FF8C42)",color:"#fff",boxShadow:"0 4px 14px rgba(255,107,53,.35)",opacity:loading?.65:1,transition:"opacity .15s,box-shadow .15s",fontFamily:"inherit",letterSpacing:"-.01em"}}>{loading?"Signing in…":"Sign In"}</button>
+            <button onClick={submit} disabled={loading} style={{width:"100%",fontSize:15,fontWeight:700,padding:"14px",marginTop:2,borderRadius:12,border:"none",cursor:loading?"not-allowed":"pointer",background:"linear-gradient(135deg,#FF6B35,#FF8C42)",color:"#fff",boxShadow:"0 4px 14px rgba(255,107,53,.35)",opacity:loading?.65:1,transition:"opacity .15s,box-shadow .15s",fontFamily:"inherit",letterSpacing:"-.01em"}}>{loading?(signup?"Creating…":"Signing in…"):(signup?"Create workspace":"Sign In")}</button>
+            <div style={{textAlign:"center",fontSize:13,color:"#6E6E73"}}>
+              {signup?"Already have a workspace? ":"New here? "}
+              <span onClick={()=>{setMode(signup?"signin":"signup");setErr("")}} style={{color:"#FF6B35",fontWeight:700,cursor:"pointer"}}>{signup?"Sign in":"Create a workspace"}</span>
+            </div>
           </div>
         </div>
       </div>

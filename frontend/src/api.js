@@ -50,6 +50,17 @@ export const login = async (d) => {
 // Public workspace info (for login-screen branding)
 export const getTenantInfo = ()       => api("/tenant");
 
+// Self-serve signup: create a workspace + owner and auto-login
+export const signup        = (d)      => api("/signup", { method: "POST", body: d });
+// Persist the auto-login under the NEW workspace slug, then the caller redirects there
+export const storeAuthFor  = (slug, r) => {
+  try {
+    localStorage.setItem("hc_token_" + slug, r.token);
+    const { token, ok, ...sess } = r;
+    localStorage.setItem("hc_session_" + slug, JSON.stringify(sess));
+  } catch {}
+};
+
 // Integration settings (Owner only)
 export const getSettings   = ()       => api("/settings");
 export const saveSettings  = (key,d)  => api(`/settings/${key}`, { method: "PUT", body: d });
