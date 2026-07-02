@@ -1,14 +1,23 @@
 const https = require("https");
 const http  = require("http");
 
-const WC_URL    = process.env.WC_URL    || "https://hobbycenterbd.com";
-const WC_KEY    = process.env.WC_KEY    || "";
-const WC_SECRET = process.env.WC_SECRET || "";
+// Per-tenant WooCommerce config with env fallback (so thc keeps working with no
+// settings row). Callers pass a cfg built from that tenant's `settings` row.
+function envConfig() {
+  return {
+    url          : process.env.WC_URL    || "https://hobbycenterbd.com",
+    key          : process.env.WC_KEY    || "",
+    secret       : process.env.WC_SECRET || "",
+    webhook_secret: process.env.WC_WEBHOOK_SECRET || "",
+  };
+}
+const cfgOf = (cfg) => ({ ...envConfig(), ...(cfg || {}) });
 
-function wcRequest(method, endpoint, body=null) {
+function wcRequest(method, endpoint, body=null, cfg) {
+  const c = cfgOf(cfg);
   return new Promise((resolve, reject) => {
-    const auth = Buffer.from(`${WC_KEY}:${WC_SECRET}`).toString("base64");
-    const url  = new URL(`${WC_URL}/wp-json/wc/v3${endpoint}`);
+    const auth = Buffer.from(`${c.key}:${c.secret}`).toString("base64");
+    const url  = new URL(`${c.url}/wp-json/wc/v3${endpoint}`);
     const data = body ? JSON.stringify(body) : null;
     const lib  = url.protocol === "https:" ? https : http;
 
@@ -39,10 +48,10 @@ function wcRequest(method, endpoint, body=null) {
 }
 
 // Get all products with pagination
-async function getAllProducts() {
+async function getAllProducts(cfg) {
   let page = 1, all = [];
   while (true) {
-    const res = await wcRequest("GET", `/products?per_page=100&page=${page}&status=publish`);
+    const res = await wcRequest("GET", `/products?per_page=100&page=${page}&status=publish`, null, cfg);
     if (res.status !== 200 || !Array.isArray(res.body) || res.body.length === 0) break;
     all = [...all, ...res.body];
     if (res.body.length < 100) break;
@@ -52,38 +61,38 @@ async function getAllProducts() {
 }
 
 // Get orders with pagination
-async function getOrders(page=1, perPage=50, after=null) {
+async function getOrders(page=1, perPage=50, after=null, cfg) {
   let endpoint = `/orders?per_page=${perPage}&page=${page}&orderby=date&order=desc`;
   if (after) endpoint += `&after=${after}`;
-  const res = await wcRequest("GET", endpoint);
+  const res = await wcRequest("GET", endpoint, null, cfg);
   return res.status === 200 ? res.body : [];
 }
 
 // Update product stock in WooCommerce
-async function updateStock(wcProductId, newStock) {
-  return wcRequest("PUT", `/products/${wcProductId}`, { stock_quantity: newStock, manage_stock: true });
+async function updateStock(wcProductId, newStock, cfg) {
+  return wcRequest("PUT", `/products/${wcProductId}`, { stock_quantity: newStock, manage_stock: true }, cfg);
 }
 
 // Get single order
-async function getOrder(orderId) {
-  const res = await wcRequest("GET", `/orders/${orderId}`);
+async function getOrder(orderId, cfg) {
+  const res = await wcRequest("GET", `/orders/${orderId}`, null, cfg);
   return res.status === 200 ? res.body : null;
 }
 
 // Update order status
-async function updateOrderStatus(orderId, status) {
-  return wcRequest("PUT", `/orders/${orderId}`, { status });
+async function updateOrderStatus(orderId, status, cfg) {
+  return wcRequest("PUT", `/orders/${orderId}`, { status }, cfg);
 }
 
 // Register webhook in WooCommerce
-async function registerWebhook(deliveryUrl, secret = process.env.WC_WEBHOOK_SECRET || "thc_webhook_2024") {
+async function registerWebhook(deliveryUrl, secret, cfg) {
   return wcRequest("POST", "/webhooks", {
     name        : "MGT Order Sync",
     topic       : "order.created",
     delivery_url: deliveryUrl,
-    secret,
+    secret      : secret || cfgOf(cfg).webhook_secret,
     status      : "active",
-  });
+  }, cfg);
 }
 
 module.exports = { getAllProducts, getOrders, getOrder, updateStock, updateOrderStatus, registerWebhook, wcRequest };

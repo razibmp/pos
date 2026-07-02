@@ -6,11 +6,16 @@ from DB" flow, which was treated as trusted per instruction.
 
 Severity: 🔴 High · 🟠 Medium · 🟡 Low · 🟢 Good (no action)
 
+> **Update (multi-tenant Phase 2):** S1, S2, S3, S8 and Q7 are now **fixed** — see
+> the ✅ notes inline. The WooCommerce/Pathao webhooks now resolve the tenant from a
+> `?tenant=SLUG` slug and verify against that tenant's own secret, failing closed
+> when none is set.
+
 ---
 
 ## A. Security findings
 
-### 🔴 S1 — Hardcoded fallback secret for WooCommerce webhook
+### 🔴 S1 — ✅ FIXED — Hardcoded fallback secret for WooCommerce webhook
 `server/index.js` (`verifyWCSignature`):
 ```js
 const secret = process.env.WC_WEBHOOK_SECRET || "thc_webhook_2024";
@@ -21,7 +26,7 @@ webhooks → inject fake pending orders / sales.
 **Fix:** remove the fallback. If the secret is missing, **reject** the webhook
 (`return false`) and log a startup warning. Never ship a default secret.
 
-### 🔴 S2 — Pathao webhook is unauthenticated when secret is unset
+### 🔴 S2 — ✅ FIXED — Pathao webhook is unauthenticated when secret is unset
 `app.post("/api/webhook/pathao")`: if `PATHAO_WEBHOOK_SECRET` is not set the code
 only logs a warning and processes the request. A forged `cancelled` status runs
 `DELETE FROM sales WHERE id=?` → **destructive data loss driven by an anonymous
@@ -29,7 +34,7 @@ request**.
 **Fix:** fail closed — if no secret is configured, reject the webhook (503/401)
 instead of processing it.
 
-### 🟠 S3 — Non-constant-time secret comparison (Pathao)
+### 🟠 S3 — ✅ FIXED — Non-constant-time secret comparison (Pathao)
 `if (provided !== secret)` uses plain `!==` (the WC path correctly uses
 `crypto.timingSafeEqual`). Timing side-channel on the shared secret.
 **Fix:** compare with `crypto.timingSafeEqual` over equal-length buffers, mirroring
@@ -60,7 +65,7 @@ order form) into an HTML string with `${...}`. A crafted name could inject marku
 into the report email.
 **Fix:** HTML-escape all interpolated values in the email template.
 
-### 🟡 S8 — Public order `product_name` not length-capped
+### 🟡 S8 — (still open) — Public order `product_name` not length-capped
 In `/api/orders/public`, `product_name = req.body.product_name || "Order"` is stored
 without the `clean(v,max)` truncation applied to the other fields (parameterized, so
 no SQLi — but unbounded storage).
@@ -119,7 +124,7 @@ a user doesn't kick out an active session.
 **Recommend:** a token version/`jti` denylist (Redis) checked in the guard —
 naturally fits the stateless/Redis step in the SaaS roadmap.
 
-### 🟡 Q7 — Settings ↔ integrations not yet wired
+### 🟡 Q7 — ✅ FIXED — Settings ↔ integrations not yet wired
 The new Settings page **stores** Pathao/WC/Sheet config, but `pathao.js` /
 `woocommerce.js` still read **env vars**, so saving in the UI has no runtime effect
 yet. Expected (called out at delivery), but a QA gap until Phase 5 of the roadmap.

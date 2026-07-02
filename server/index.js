@@ -202,15 +202,7 @@ async function initDB() {
   // Seed categories
   const [[{cnt:cc}]] = await q("SELECT COUNT(*) as cnt FROM categories");
   if (cc === 0) {
-    const cats = [
-      ["Building Blocks","🧱"],["Action Figures","🤖"],["Board Games","🎲"],
-      ["Remote Control","🚗"],["Puzzles","🧩"],["Dolls & Accessories","👗"],
-      ["Educational Toys","📚"],["Outdoor Toys","🌳"],["Arts & Crafts","🎨"],
-      ["Model Kits","🔩"],["F1 1:18 Scale","🏎️"],["F1 1:32 Scale","🏎️"],
-      ["F1 1:43 Scale","🏎️"],["F1 1:64 Scale","🏎️"],["Scale Figure","🗿"],
-      ["Diorama","🏔️"],["Wall Mount Poster","🖼️"],["Jersey","👕"],["Other","🏷️"]
-    ];
-    for (const [n, e] of cats) await q("INSERT INTO categories (name,emoji) VALUES (?,?)", [n, e]);
+    for (const [n, e] of DEFAULT_CATEGORIES) await q("INSERT INTO categories (name,emoji) VALUES (?,?)", [n, e]);
     console.log("✅ Categories seeded");
   }
 
@@ -355,6 +347,15 @@ async function initDB() {
 // column to every business table, backfilling existing rows to tenant 1 (THC).
 // Query logic is NOT yet tenant-scoped — that is Phase 2. See docs/SAAS-ARCHITECTURE.md.
 // Every ALTER is wrapped in try/catch so re-running is a no-op (idempotent).
+// Default categories seeded for a brand-new tenant (and the original thc DB)
+const DEFAULT_CATEGORIES = [
+  ["Building Blocks","🧱"],["Action Figures","🤖"],["Board Games","🎲"],
+  ["Remote Control","🚗"],["Puzzles","🧩"],["Dolls & Accessories","👗"],
+  ["Educational Toys","📚"],["Outdoor Toys","🌳"],["Arts & Crafts","🎨"],
+  ["Model Kits","🔩"],["F1 1:18 Scale","🏎️"],["F1 1:32 Scale","🏎️"],
+  ["F1 1:43 Scale","🏎️"],["F1 1:64 Scale","🏎️"],["Scale Figure","🗿"],
+  ["Diorama","🏔️"],["Wall Mount Poster","🖼️"],["Jersey","👕"],["Other","🏷️"]
+];
 const TENANT_TABLES = [
   "users","categories","products","sales","pending_orders","expenses","settings",
   "purchases","purchase_items","stakeholders","stakeholder_transactions","deliveries",
@@ -472,6 +473,7 @@ const PUBLIC_API = new Set([
   "/webhook/woocommerce",
   "/webhook/pathao",
   "/health",
+  "/admin/tenants",   // platform-admin routes: guarded by X-Admin-Token, not a user JWT
 ]);
 // Guard: every /api route requires a valid token unless explicitly public
 app.use("/api", (req, res, next) => {
@@ -491,6 +493,45 @@ function requireRole(...roles) {
   return (req, res, next) =>
     roles.includes(req.user?.role) ? next() : res.status(403).json({ error: "Forbidden" });
 }
+
+// ── PLATFORM ADMIN (tenant provisioning, Phase 4) ─────────────────────────────
+// Gated by a shared PLATFORM_ADMIN_TOKEN (set in .env), not a user session —
+// platform admin sits above all tenants. Disabled if the token is unset.
+function requirePlatformAdmin(req, res, next) {
+  const tok = req.headers["x-admin-token"] || "";
+  if (!process.env.PLATFORM_ADMIN_TOKEN) return res.status(403).json({ error: "Provisioning disabled (PLATFORM_ADMIN_TOKEN not set)" });
+  const a = Buffer.from(String(tok)), b = Buffer.from(process.env.PLATFORM_ADMIN_TOKEN);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(403).json({ error: "Forbidden" });
+  next();
+}
+app.get("/api/admin/tenants", requirePlatformAdmin, async (_req, res) => {
+  const [rows] = await q("SELECT id, slug, name, status, plan, created_at FROM tenants ORDER BY id");
+  res.json(rows);
+});
+// Create a new tenant + its Owner user in one shot (the "few minutes" flow)
+app.post("/api/admin/tenants", requirePlatformAdmin, async (req, res) => {
+  const { slug, name, ownerUsername, ownerPassword, plan } = req.body || {};
+  if (!/^[a-z0-9-]{2,40}$/.test(slug || ""))
+    return res.status(400).json({ error: "slug must be 2–40 chars: a–z, 0–9, hyphen" });
+  if (!ownerUsername || !ownerPassword)
+    return res.status(400).json({ error: "ownerUsername and ownerPassword required" });
+  const pwErr = validatePassword(ownerPassword);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  try {
+    const [[dupe]] = await q("SELECT id FROM tenants WHERE slug=?", [slug]);
+    if (dupe) return res.status(409).json({ error: "Workspace slug already exists" });
+    const [r] = await q("INSERT INTO tenants (slug,name,status,plan) VALUES (?,?,?,?)",
+      [slug, name || slug, "active", plan || "free"]);
+    const tid = r.insertId;
+    for (const [n, e] of DEFAULT_CATEGORIES)
+      await q("INSERT INTO categories (tenant_id,name,emoji) VALUES (?,?,?)", [tid, n, e]);
+    const hash = bcrypt.hashSync(ownerPassword, 10);
+    await q("INSERT INTO users (tenant_id,username,password,name,role,emoji) VALUES (?,?,?,?,?,?)",
+      [tid, ownerUsername.toLowerCase().trim(), hash, name || "Owner", "Owner", "👑"]);
+    console.log(`✅ Provisioned tenant '${slug}' (id=${tid})`);
+    res.json({ ok: true, id: tid, slug, loginUrl: `/${slug}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── TENANT SCOPE (Phase 2) ────────────────────────────────────────────────────
 // Every business query must be filtered by tenant. tq() is a guardrail: it refuses
@@ -596,6 +637,22 @@ const maskSecrets = (obj={}) => {
 async function readSetting(tenant_id, key) {
   const [[row]] = await q("SELECT v FROM settings WHERE tenant_id=? AND k=?", [tenant_id, key]);
   try { return row ? JSON.parse(row.v) : {}; } catch { return {}; }
+}
+// Build integration configs for a tenant. Empty fields fall through to env vars
+// inside pathao.js / woocommerce.js, so thc (no settings row) keeps using .env.
+const nz = (v) => (v === "" || v === null || v === undefined ? undefined : v);
+async function pathaoConfig(tenant_id) {
+  const s = await readSetting(tenant_id, "pathao");
+  return {
+    base_url: nz(s.base_url), client_id: nz(s.client_id), client_secret: nz(s.client_secret),
+    username: nz(s.username), password: nz(s.password), store_id: nz(s.store_id),
+    sender_name: nz(s.sender_name), sender_phone: nz(s.sender_phone),
+    city_id: nz(s.city_id), zone_id: nz(s.zone_id),
+  };
+}
+async function wcConfig(tenant_id) {
+  const s = await readSetting(tenant_id, "woocommerce");
+  return { url: nz(s.url), key: nz(s.key), secret: nz(s.secret), webhook_secret: nz(s.webhook_secret) };
 }
 app.get("/api/settings", requireRole("Owner"), async (req, res) => {
   try {
@@ -845,7 +902,7 @@ app.get("/api/deliveries", async (req, res) => {
 app.post("/api/deliveries", async (req, res) => {
   try {
     const d = req.body, t = tenantId(req);
-    // Create order on Pathao
+    // Create order on Pathao (tenant's own credentials, falling back to env)
     const pathaoRes = await Pathao.createOrder({
       merchant_order_id : d.merchant_order_id,
       recipient_name    : d.recipient_name,
@@ -856,7 +913,7 @@ app.post("/api/deliveries", async (req, res) => {
       item_quantity     : d.item_quantity || 1,
       item_weight       : d.item_weight || 0.5,
       note              : d.note || "",
-    });
+    }, await pathaoConfig(t));
 
     if (pathaoRes.status !== 200) {
       return res.status(400).json({ error: "Pathao error: " + JSON.stringify(pathaoRes.body) });
@@ -918,7 +975,7 @@ app.get("/api/deliveries/:id/sync", async (req, res) => {
     if (!delivery) return res.status(404).json({ error: "Not found" });
     if (!delivery.consignment_id) return res.status(400).json({ error: "No consignment ID" });
 
-    const pathaoRes = await Pathao.getOrderStatus(delivery.consignment_id);
+    const pathaoRes = await Pathao.getOrderStatus(delivery.consignment_id, await pathaoConfig(t));
     if (pathaoRes.status === 200) {
       const pathao_status = pathaoRes.body?.data?.order_status || delivery.pathao_status;
       const status = pathao_status?.toLowerCase().includes("deliver") ? "delivered"
@@ -976,9 +1033,10 @@ app.get("/api/delivery-stats", async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get("/api/pathao/zones", async (_, res) => {
+app.get("/api/pathao/zones", async (req, res) => {
   try {
-    const result = await Pathao.getZoneList(process.env.PATHAO_CITY_ID || 1);
+    const cfg = await pathaoConfig(tenantId(req));
+    const result = await Pathao.getZoneList(cfg.city_id || process.env.PATHAO_CITY_ID || 1, cfg);
     res.json(result.body);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1189,7 +1247,7 @@ app.post("/api/pending-orders/:id/approve", async (req, res) => {
         item_quantity     : order_qty,
         item_weight       : 0.5,
         note              : po.notes || (isWC ? `WooCommerce Order #${po.wc_order_id}` : ""),
-      });
+      }, await pathaoConfig(t));
       console.log("Pathao approve:", JSON.stringify(pathaoRes.body));
       consignment_id = pathaoRes.body?.data?.consignment_id || null;
       pathao_status  = pathaoRes.body?.data?.order_status   || "Pending";
@@ -1386,7 +1444,7 @@ app.post("/api/preorders/:id/pathao", async (req, res) => {
       amount_to_collect: +po.product_price || +po.paid_amount,
       item_description: po.comments || "Pre-order",
       item_quantity: 1, item_weight: 0.5, note: po.comments || "",
-    });
+    }, await pathaoConfig(t));
     const consignment_id = pathaoRes.body?.data?.consignment_id || null;
     const pathao_status  = pathaoRes.body?.data?.order_status   || "Pending";
     const [delRow] = await tq(req,
@@ -1410,17 +1468,17 @@ app.delete("/api/preorders/:id", async (req, res) => {
 // ── WOOCOMMERCE SYNC ──────────────────────────────────────────────────────────
 
 // Helper: log sync event
-async function wcLog(type, status, message) {
-  try { await q("INSERT INTO wc_sync_log (type,status,message) VALUES (?,?,?)", [type, status, message]); }
+async function wcLog(type, status, message, tenant_id=1) {
+  try { await q("INSERT INTO wc_sync_log (tenant_id,type,status,message) VALUES (?,?,?,?)", [tenant_id, type, status, message]); }
   catch(e) { console.error("Log error:", e.message); }
 }
 
-// Helper: process a single WC order into MGT pending approval queue
-async function processWCOrder(order) {
+// Helper: process a single WC order into MGT pending approval queue (for tenant t)
+async function processWCOrder(order, t=1) {
   const wcOrderId = order.id;
 
-  // Check if already in wc_orders (processed or pending)
-  const [[existing]] = await q("SELECT id FROM wc_orders WHERE wc_order_id=?", [wcOrderId]);
+  // Check if already in wc_orders for this tenant (processed or pending)
+  const [[existing]] = await q("SELECT id FROM wc_orders WHERE wc_order_id=? AND tenant_id=?", [wcOrderId, t]);
   if (existing) return { skipped: true, reason: "already processed" };
 
   const customerName    = `${order.billing?.first_name||""} ${order.billing?.last_name||""}`.trim() || "WooCommerce Customer";
@@ -1442,28 +1500,29 @@ async function processWCOrder(order) {
 
   // Route into pending_orders for admin approval before Pathao
   const [pendingRow] = await q(
-    `INSERT INTO pending_orders (inv,customer_name,customer_phone,customer_address,product_details,product_price,delivery_type,delivery_charge,total,status,source,wc_order_id,wc_items)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [inv, customerName, customerPhone, customerAddress, productDesc, orderTotal,
+    `INSERT INTO pending_orders (tenant_id,inv,customer_name,customer_phone,customer_address,product_details,product_price,delivery_type,delivery_charge,total,status,source,wc_order_id,wc_items)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [t, inv, customerName, customerPhone, customerAddress, productDesc, orderTotal,
      isOutside ? "outside" : "inside", deliveryCharge, total,
      "pending", "woocommerce", wcOrderId, JSON.stringify(itemSummary)]
   );
 
   // Record in wc_orders with pending_approval status (no sale/delivery yet)
   await q(
-    `INSERT INTO wc_orders (wc_order_id,status,customer_name,customer_phone,customer_address,total,payment_method,items)
-     VALUES (?,?,?,?,?,?,?,?)`,
-    [wcOrderId, "pending_approval", customerName, customerPhone,
+    `INSERT INTO wc_orders (tenant_id,wc_order_id,status,customer_name,customer_phone,customer_address,total,payment_method,items)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [t, wcOrderId, "pending_approval", customerName, customerPhone,
      customerAddress, orderTotal, paymentMethod, JSON.stringify(itemSummary)]
   );
 
-  await wcLog("order_sync", "success", `WC order #${wcOrderId} → pending approval (ID: ${pendingRow.insertId})`);
+  await wcLog("order_sync", "success", `WC order #${wcOrderId} → pending approval (ID: ${pendingRow.insertId})`, t);
   return { success: true, pendingOrderId: pendingRow.insertId };
 }
 
-// Verify the WooCommerce webhook HMAC-SHA256 signature against the shared secret
-function verifyWCSignature(req) {
-  const secret = process.env.WC_WEBHOOK_SECRET || "thc_webhook_2024";
+// Verify the WooCommerce webhook HMAC-SHA256 signature against a tenant's secret.
+// Fails closed when no secret is configured (no hardcoded fallback).
+function verifyWCSignature(req, secret) {
+  if (!secret) return false;
   const sig = req.headers["x-wc-webhook-signature"];
   if (!sig || !req.rawBody) return false;
   const expect = crypto.createHmac("sha256", secret).update(req.rawBody).digest("base64");
@@ -1473,22 +1532,28 @@ function verifyWCSignature(req) {
   } catch { return false; }
 }
 
-// WooCommerce order webhook
+// WooCommerce order webhook. The merchant configures the delivery URL with their
+// workspace slug (…/api/webhook/woocommerce?tenant=SLUG); we verify the signature
+// against that tenant's own webhook secret.
 app.post("/api/webhook/woocommerce", async (req, res) => {
   try {
-    if (!verifyWCSignature(req)) {
+    const tenant = await tenantBySlug((req.query.tenant || "thc").toString().toLowerCase());
+    if (!tenant || tenant.status !== "active") return res.status(404).json({ error: "Unknown workspace" });
+    const wc = await wcConfig(tenant.id);
+    const secret = wc.webhook_secret || process.env.WC_WEBHOOK_SECRET;
+    if (!verifyWCSignature(req, secret)) {
       console.warn("🚫 WooCommerce webhook: invalid signature");
       return res.status(401).json({ error: "Invalid signature" });
     }
     const order = req.body;
-    console.log(`🛒 WooCommerce webhook: order #${order.id} (${order.status})`);
+    console.log(`🛒 WooCommerce webhook (${tenant.slug}): order #${order.id} (${order.status})`);
 
     // Only process paid/processing orders
     if (!["processing", "completed", "on-hold"].includes(order.status)) {
       return res.json({ ok: true, skipped: true, reason: `Status ${order.status} not actionable` });
     }
 
-    const result = await processWCOrder(order);
+    const result = await processWCOrder(order, tenant.id);
     res.json({ ok: true, ...result });
   } catch(e) {
     console.error("WC webhook error:", e.message);
@@ -1500,8 +1565,9 @@ app.post("/api/webhook/woocommerce", async (req, res) => {
 // Sync all WooCommerce products to MGT mapping table
 app.post("/api/wc/sync-products", async (req, res) => {
   try {
+    const t = tenantId(req), cfg = await wcConfig(t);
     console.log("🔄 Syncing WooCommerce products...");
-    const wcProducts = await WC.getAllProducts();
+    const wcProducts = await WC.getAllProducts(cfg);
     let mapped = 0, created = 0, skipped = 0;
 
     for (const wcp of wcProducts) {
@@ -1510,49 +1576,49 @@ app.post("/api/wc/sync-products", async (req, res) => {
       const wcId = wcp.id;
       const wcStock = wcp.stock_quantity || 0;
 
-      // Check if already mapped
-      const [[existing]] = await q("SELECT id FROM wc_product_map WHERE wc_product_id=?", [wcId]);
+      // Check if already mapped (within this tenant)
+      const [[existing]] = await tq(req, "SELECT id FROM wc_product_map WHERE wc_product_id=? AND tenant_id=?", [wcId, t]);
       if (existing) { skipped++; continue; }
 
       // Try to find matching MGT product by SKU (brand field) or name
       let mgtProduct = null;
       if (sku) {
-        const [[byBrand]] = await q("SELECT * FROM products WHERE brand=?", [sku]);
+        const [[byBrand]] = await tq(req, "SELECT * FROM products WHERE brand=? AND tenant_id=?", [sku, t]);
         if (byBrand) mgtProduct = byBrand;
       }
       if (!mgtProduct && name) {
         const nameSearch = "%" + name.substring(0,20) + "%";
-      const [byName] = await q("SELECT * FROM products WHERE name LIKE ? LIMIT 1", [nameSearch]);
+      const [byName] = await tq(req, "SELECT * FROM products WHERE name LIKE ? AND tenant_id=? LIMIT 1", [nameSearch, t]);
         if (byName.length > 0) mgtProduct = byName[0];
       }
 
       if (mgtProduct) {
         // Map existing MGT product to WC product
         // Update MGT stock and price from WooCommerce (WC is master)
-        await q("UPDATE products SET stock=?, sell=? WHERE id=?",
-          [wcStock, +wcp.price||+wcp.regular_price||mgtProduct.sell, mgtProduct.id]);
-        await q("INSERT IGNORE INTO wc_product_map (mgt_product_id,wc_product_id,wc_sku,wc_name) VALUES (?,?,?,?)",
-          [mgtProduct.id, wcId, sku, name]);
-        await q("UPDATE wc_product_map SET last_sync=NOW(), wc_name=? WHERE wc_product_id=?", [name, wcId]);
+        await tq(req, "UPDATE products SET stock=?, sell=? WHERE id=? AND tenant_id=?",
+          [wcStock, +wcp.price||+wcp.regular_price||mgtProduct.sell, mgtProduct.id, t]);
+        await tq(req, "INSERT IGNORE INTO wc_product_map (tenant_id,mgt_product_id,wc_product_id,wc_sku,wc_name) VALUES (?,?,?,?,?)",
+          [t, mgtProduct.id, wcId, sku, name]);
+        await tq(req, "UPDATE wc_product_map SET last_sync=NOW(), wc_name=? WHERE wc_product_id=? AND tenant_id=?", [name, wcId, t]);
         mapped++;
       } else {
         // Create new MGT product from WC product
         const sellPrice = +wcp.price || +wcp.regular_price || 0;
         const cat = wcp.categories?.[0]?.name || "Other";
-        const [r] = await q(
-          "INSERT INTO products (name,cat,buy,sell,stock,low,emoji,brand) VALUES (?,?,?,?,?,?,?,?)",
-          [name, cat, 0, sellPrice, wcStock, 5, "🛒", sku]
+        const [r] = await tq(req,
+          "INSERT INTO products (tenant_id,name,cat,buy,sell,stock,low,emoji,brand) VALUES (?,?,?,?,?,?,?,?,?)",
+          [t, name, cat, 0, sellPrice, wcStock, 5, "🛒", sku]
         );
-        await q("INSERT IGNORE INTO wc_product_map (mgt_product_id,wc_product_id,wc_sku,wc_name) VALUES (?,?,?,?)",
-          [r.insertId, wcId, sku, name]);
+        await tq(req, "INSERT IGNORE INTO wc_product_map (tenant_id,mgt_product_id,wc_product_id,wc_sku,wc_name) VALUES (?,?,?,?,?)",
+          [t, r.insertId, wcId, sku, name]);
         created++;
       }
     }
 
-    await wcLog("product_sync", "success", `Synced ${wcProducts.length} WC products: ${mapped} mapped, ${created} created, ${skipped} skipped`);
+    await wcLog("product_sync", "success", `Synced ${wcProducts.length} WC products: ${mapped} mapped, ${created} created, ${skipped} skipped`, t);
     res.json({ ok: true, total: wcProducts.length, mapped, created, skipped });
   } catch(e) {
-    await wcLog("product_sync", "error", e.message);
+    await wcLog("product_sync", "error", e.message, tenantId(req));
     res.status(500).json({ error: e.message });
   }
 });
@@ -1560,23 +1626,23 @@ app.post("/api/wc/sync-products", async (req, res) => {
 // Sync recent WooCommerce orders (for backfill)
 app.post("/api/wc/sync-orders", async (req, res) => {
   try {
-    const { pages=1 } = req.body;
+    const { pages=1 } = req.body, t = tenantId(req), cfg = await wcConfig(t);
     let totalProcessed=0, totalSkipped=0, totalErrors=0;
 
     for (let page=1; page<=pages; page++) {
-      const orders = await WC.getOrders(page, 50);
+      const orders = await WC.getOrders(page, 50, null, cfg);
       if (!orders.length) break;
 
       for (const order of orders) {
         // Only import Processing orders - skip completed/cancelled/etc
         if (order.status !== "processing") { totalSkipped++; continue; }
         try {
-          const result = await processWCOrder(order);
+          const result = await processWCOrder(order, t);
           if (result.skipped) totalSkipped++;
           else totalProcessed++;
         } catch(e) {
           totalErrors++;
-          await wcLog("order_sync", "error", `Order #${order.id}: ${e.message}`);
+          await wcLog("order_sync", "error", `Order #${order.id}: ${e.message}`, t);
         }
       }
     }
@@ -1590,11 +1656,12 @@ app.post("/api/wc/sync-orders", async (req, res) => {
 // Update WooCommerce stock when MGT stock changes
 app.post("/api/wc/push-stock/:mgtProductId", async (req, res) => {
   try {
-    const [[map]] = await q("SELECT wc_product_id FROM wc_product_map WHERE mgt_product_id=?", [req.params.mgtProductId]);
+    const t = tenantId(req);
+    const [[map]] = await tq(req, "SELECT wc_product_id FROM wc_product_map WHERE mgt_product_id=? AND tenant_id=?", [req.params.mgtProductId, t]);
     if (!map) return res.json({ ok: false, reason: "Product not mapped to WooCommerce" });
-    const [[prod]] = await q("SELECT stock FROM products WHERE id=?", [req.params.mgtProductId]);
+    const [[prod]] = await tq(req, "SELECT stock FROM products WHERE id=? AND tenant_id=?", [req.params.mgtProductId, t]);
     if (!prod) return res.status(404).json({ error: "Product not found" });
-    await WC.updateStock(map.wc_product_id, prod.stock);
+    await WC.updateStock(map.wc_product_id, prod.stock, await wcConfig(t));
     res.json({ ok: true, wc_product_id: map.wc_product_id, new_stock: prod.stock });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1602,10 +1669,11 @@ app.post("/api/wc/push-stock/:mgtProductId", async (req, res) => {
 // Get WooCommerce sync status
 app.get("/api/wc/status", async (req, res) => {
   try {
-    const [[{mapped}]]  = await q("SELECT COUNT(*) as mapped FROM wc_product_map");
-    const [[{orders}]]  = await q("SELECT COUNT(*) as orders FROM wc_orders");
-    const [logs]        = await q("SELECT * FROM wc_sync_log ORDER BY id DESC LIMIT 20");
-    const [[{errors}]]  = await q("SELECT COUNT(*) as errors FROM wc_sync_log WHERE status='error' AND created_at > NOW() - INTERVAL 24 HOUR");
+    const t = tenantId(req);
+    const [[{mapped}]]  = await tq(req, "SELECT COUNT(*) as mapped FROM wc_product_map WHERE tenant_id=?", [t]);
+    const [[{orders}]]  = await tq(req, "SELECT COUNT(*) as orders FROM wc_orders WHERE tenant_id=?", [t]);
+    const [logs]        = await tq(req, "SELECT * FROM wc_sync_log WHERE tenant_id=? ORDER BY id DESC LIMIT 20", [t]);
+    const [[{errors}]]  = await tq(req, "SELECT COUNT(*) as errors FROM wc_sync_log WHERE tenant_id=? AND status='error' AND created_at > NOW() - INTERVAL 24 HOUR", [t]);
     res.json({ mapped, orders, errors, logs: logs.map(l=>({...l, created_at: l.created_at?.toISOString?.().replace("T"," ").slice(0,16)||l.created_at})) });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1613,16 +1681,19 @@ app.get("/api/wc/status", async (req, res) => {
 // Get WooCommerce orders list
 app.get("/api/wc/orders", async (req, res) => {
   try {
-    const [rows] = await q("SELECT * FROM wc_orders ORDER BY id DESC LIMIT 100");
+    const [rows] = await tq(req, "SELECT * FROM wc_orders WHERE tenant_id=? ORDER BY id DESC LIMIT 100", [tenantId(req)]);
     res.json(rows.map(r=>({...r, synced_at: r.synced_at?.toISOString?.().replace("T"," ").slice(0,16)||r.synced_at, total: +r.total})));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// Register WooCommerce webhook automatically
+// Register WooCommerce webhook automatically (points back at this tenant's slug)
 app.post("/api/wc/register-webhook", async (req, res) => {
   try {
-    const deliveryUrl = `${req.protocol}://${req.get("host")}/api/webhook/woocommerce`;
-    const result = await WC.registerWebhook(deliveryUrl);
+    const t = tenantId(req);
+    const [[tn]] = await q("SELECT slug FROM tenants WHERE id=?", [t]);
+    const cfg = await wcConfig(t);
+    const deliveryUrl = `${req.protocol}://${req.get("host")}/api/webhook/woocommerce?tenant=${tn?.slug||"thc"}`;
+    const result = await WC.registerWebhook(deliveryUrl, cfg.webhook_secret, cfg);
     res.json({ ok: result.status === 201, result: result.body });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1630,12 +1701,18 @@ app.post("/api/wc/register-webhook", async (req, res) => {
 // Cron: sync WC stock every 30 minutes
 cron.schedule("*/30 * * * *", async () => {
   try {
-    const [maps] = await q("SELECT mgt_product_id, wc_product_id FROM wc_product_map");
-    for (const map of maps) {
-      const [[prod]] = await q("SELECT stock FROM products WHERE id=?", [map.mgt_product_id]);
-      if (prod) await WC.updateStock(map.wc_product_id, +prod.stock);
+    const [tenants] = await q("SELECT id FROM tenants WHERE status='active'");
+    let total = 0;
+    for (const tn of tenants) {
+      const cfg = await wcConfig(tn.id);
+      const [maps] = await q("SELECT mgt_product_id, wc_product_id FROM wc_product_map WHERE tenant_id=?", [tn.id]);
+      for (const map of maps) {
+        const [[prod]] = await q("SELECT stock FROM products WHERE id=? AND tenant_id=?", [map.mgt_product_id, tn.id]);
+        if (prod) await WC.updateStock(map.wc_product_id, +prod.stock, cfg);
+      }
+      total += maps.length;
     }
-    console.log(`🔄 Stock sync: ${maps.length} products pushed to WooCommerce`);
+    console.log(`🔄 Stock sync: ${total} products pushed to WooCommerce`);
   } catch(e) { console.error("Stock sync error:", e.message); }
 });
 
@@ -1644,21 +1721,26 @@ cron.schedule("*/30 * * * *", async () => {
 // Set this in Pathao merchant panel: https://yourdomain.com/api/webhook/pathao
 app.post("/api/webhook/pathao", async (req, res) => {
   try {
-    // Require a shared secret (set PATHAO_WEBHOOK_SECRET and append ?secret=... or send
-    // X-Pathao-Signature in the Pathao panel webhook URL). Without it, anyone could forge
-    // status updates — including "cancelled", which deletes the linked sale.
-    const secret = process.env.PATHAO_WEBHOOK_SECRET;
-    if (secret) {
-      const provided = req.headers["x-pathao-signature"] || req.query.secret;
-      if (provided !== secret) {
-        console.warn("🚫 Pathao webhook: invalid/missing secret");
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-    } else {
-      console.warn("⚠️  PATHAO_WEBHOOK_SECRET not set — Pathao webhook is unauthenticated. Set it in .env and update the webhook URL in the Pathao panel.");
+    // Merchant configures …/api/webhook/pathao?tenant=SLUG in the Pathao panel.
+    const tenant = await tenantBySlug((req.query.tenant || "thc").toString().toLowerCase());
+    if (!tenant || tenant.status !== "active") return res.status(404).json({ error: "Unknown workspace" });
+    const t = tenant.id;
+
+    // Require the tenant's shared secret. Fail closed if none is configured —
+    // a forged "cancelled" would otherwise delete the linked sale.
+    const secret = (await readSetting(t, "pathao")).webhook_secret || process.env.PATHAO_WEBHOOK_SECRET;
+    if (!secret) {
+      console.warn(`🚫 Pathao webhook rejected: no secret configured for tenant ${tenant.slug}`);
+      return res.status(401).json({ error: "Webhook not configured" });
+    }
+    const provided = String(req.headers["x-pathao-signature"] || req.query.secret || "");
+    const a = Buffer.from(provided), b = Buffer.from(String(secret));
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn("🚫 Pathao webhook: invalid/missing secret");
+      return res.status(401).json({ error: "Unauthorized" });
     }
     const data = req.body;
-    console.log("📦 Pathao webhook received:", JSON.stringify(data));
+    console.log(`📦 Pathao webhook (${tenant.slug}):`, JSON.stringify(data));
 
     const consignment_id = data.consignment_id || data.order_id;
     const pathao_status  = data.order_status || data.status;
@@ -1674,15 +1756,15 @@ app.post("/api/webhook/pathao", async (req, res) => {
     else if (statusLower.includes("cancel") || statusLower.includes("return")) status = "cancelled";
     else if (statusLower.includes("pick") || statusLower.includes("transit")) status = "in_transit";
 
-    // Update delivery
-    await q("UPDATE deliveries SET pathao_status=?, status=? WHERE consignment_id=?",
-      [pathao_status, status, consignment_id]);
+    // Update delivery (scoped to the tenant that owns the webhook)
+    await q("UPDATE deliveries SET pathao_status=?, status=? WHERE consignment_id=? AND tenant_id=?",
+      [pathao_status, status, consignment_id, t]);
 
     // If cancelled — delete linked sale so revenue is deducted
     if (status === "cancelled") {
-      const [[delivery]] = await q("SELECT * FROM deliveries WHERE consignment_id=?", [consignment_id]);
+      const [[delivery]] = await q("SELECT * FROM deliveries WHERE consignment_id=? AND tenant_id=?", [consignment_id, t]);
       if (delivery?.sale_id) {
-        await q("DELETE FROM sales WHERE id=?", [delivery.sale_id]);
+        await q("DELETE FROM sales WHERE id=? AND tenant_id=?", [delivery.sale_id, t]);
       }
     }
 
@@ -1706,17 +1788,26 @@ function createTransporter() {
   });
 }
 
-async function sendDailyReport() {
+async function sendDailyReport(tenant) {
+  const t = tenant.id;
   const transporter = createTransporter();
   if (!transporter) {
     console.log("⚠️ Email not configured — skipping daily report");
     return;
   }
+  // Per-tenant recipient: from the tenant's email settings, else env (thc only)
+  const emailCfg = await readSetting(t, "email");
+  const recipient = emailCfg.report_to || (tenant.slug === "thc" ? (process.env.EMAIL_REPORT_TO || process.env.EMAIL_USER) : null);
+  if (!recipient) {
+    console.log(`⚠️ No report recipient for tenant ${tenant.slug} — skipping`);
+    return;
+  }
+  const bizName = tenant.name || "Dashboard";
 
   const today = new Date().toISOString().split("T")[0];
   const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
 
-  // Get yesterday stats
+  // Get yesterday stats (scoped to this tenant)
   const [[salesStats]] = await q(`
     SELECT
       COUNT(*) as total_sales,
@@ -1724,13 +1815,13 @@ async function sendDailyReport() {
       COALESCE(SUM(profit), 0) as gross_profit,
       COALESCE(SUM(CASE WHEN payment='Pathao COD' THEN total ELSE 0 END), 0) as pathao_revenue,
       COALESCE(SUM(CASE WHEN payment!='Pathao COD' THEN total ELSE 0 END), 0) as walkin_revenue
-    FROM sales WHERE date = ?
-  `, [yesterday]);
+    FROM sales WHERE tenant_id = ? AND date = ?
+  `, [t, yesterday]);
 
   const [[expStats]] = await q(`
     SELECT COALESCE(SUM(amount), 0) as total_expenses
-    FROM expenses WHERE date = ?
-  `, [yesterday]);
+    FROM expenses WHERE tenant_id = ? AND date = ?
+  `, [t, yesterday]);
 
   const [[delivStats]] = await q(`
     SELECT
@@ -1739,17 +1830,17 @@ async function sendDailyReport() {
       COUNT(CASE WHEN status='pending' THEN 1 END) as pending,
       COUNT(CASE WHEN status='cancelled' THEN 1 END) as cancelled,
       COALESCE(SUM(CASE WHEN status!='cancelled' THEN delivery_charge ELSE 0 END), 0) as delivery_income
-    FROM deliveries WHERE DATE(created_at) = ?
-  `, [yesterday]);
+    FROM deliveries WHERE tenant_id = ? AND DATE(created_at) = ?
+  `, [t, yesterday]);
 
   const [lowStock] = await q(`
-    SELECT name, emoji, stock, low FROM products WHERE stock <= low ORDER BY stock ASC LIMIT 10
-  `);
+    SELECT name, emoji, stock, low FROM products WHERE tenant_id = ? AND stock <= low ORDER BY stock ASC LIMIT 10
+  `, [t]);
 
   const [pendingDeliveries] = await q(`
     SELECT recipient_name, recipient_phone, amount_to_collect, consignment_id, pathao_status
-    FROM deliveries WHERE status = 'pending' ORDER BY id DESC LIMIT 10
-  `);
+    FROM deliveries WHERE tenant_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 10
+  `, [t]);
 
   const netProfit = (+salesStats.gross_profit) - (+expStats.total_expenses);
   const totalRevenue = (+salesStats.revenue) + (+delivStats.delivery_income);
@@ -1787,7 +1878,7 @@ async function sendDailyReport() {
 <div class="container">
   <div class="header">
     <div style="font-size:36px">🎮</div>
-    <h1>The Hobby Center</h1>
+    <h1>${bizName}</h1>
     <p>Daily Report — ${yesterday}</p>
   </div>
   <div class="body">
@@ -1844,26 +1935,45 @@ async function sendDailyReport() {
     </div>` : ""}
   </div>
   <div class="footer">
-    🎮 The Hobby Center · mgt.hobbycenterbd.com<br>
+    🎮 ${bizName}<br>
     This report is auto-generated every morning at 8:00 AM
   </div>
 </div>
 </body></html>`;
 
   await transporter.sendMail({
-    from: `"The Hobby Center" <${process.env.EMAIL_USER}>`,
-    to: process.env.EMAIL_REPORT_TO || process.env.EMAIL_USER,
+    from: `"${bizName}" <${process.env.EMAIL_USER}>`,
+    to: recipient,
     subject: `📊 Daily Report — ${yesterday} | Revenue: ${formatBDT(totalRevenue)} | Profit: ${formatBDT(netProfit)}`,
     html,
   });
 
-  console.log(`✅ Daily report sent for ${yesterday}`);
+  console.log(`✅ Daily report sent for ${tenant.slug} (${yesterday})`);
 }
+
+// Send the daily report to every active tenant that has a recipient configured
+async function sendAllDailyReports() {
+  const [tenants] = await q("SELECT id, slug, name, status FROM tenants WHERE status='active'");
+  for (const tn of tenants) {
+    try { await sendDailyReport(tn); }
+    catch(e) { console.error(`Daily report failed for ${tn.slug}:`, e.message); }
+  }
+}
+
+// Manual trigger — sends the current tenant's report now (fixes the Settings button)
+app.get("/api/send-report", async (req, res) => {
+  try {
+    const [[tn]] = await q("SELECT id, slug, name, status FROM tenants WHERE id=?", [tenantId(req)]);
+    if (!tn) return res.status(404).json({ error: "Tenant not found" });
+    await sendDailyReport(tn);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── CRON: Daily report at 8:00 AM Bangladesh time (UTC+6 = 02:00 UTC) ────────
 cron.schedule("0 2 * * *", async () => {
   console.log("⏰ Running daily report cron...");
-  try { await sendDailyReport(); }
+  try { await sendAllDailyReports(); }
   catch(e) { console.error("Daily report failed:", e.message); }
 });
 
