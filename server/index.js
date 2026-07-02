@@ -739,41 +739,42 @@ app.delete("/api/expenses/:id", async (req, res) => {
 });
 
 // ── PURCHASES ────────────────────────────────────────────────────────────────
-app.get("/api/purchases", async (_, res) => {
-  const [rows] = await q("SELECT * FROM purchases ORDER BY id DESC");
+app.get("/api/purchases", async (req, res) => {
+  const t = tenantId(req);
+  const [rows] = await tq(req, "SELECT * FROM purchases WHERE tenant_id=? ORDER BY id DESC", [t]);
   for (const row of rows) {
-    const [items] = await q("SELECT * FROM purchase_items WHERE purchase_id = ?", [row.id]);
+    const [items] = await tq(req, "SELECT * FROM purchase_items WHERE purchase_id = ? AND tenant_id=?", [row.id, t]);
     row.items = items;
     row.order_date = row.order_date?.toISOString?.().split("T")[0] || row.order_date;
   }
   res.json(rows);
 });
 app.post("/api/purchases", async (req, res) => {
-  const p = req.body;
-  const [r] = await q(
-    `INSERT INTO purchases (supplier_name,order_date,status,product_cost_bdt,china_shipping_bdt,cnf_bdt,
+  const p = req.body, t = tenantId(req);
+  const [r] = await tq(req,
+    `INSERT INTO purchases (tenant_id,supplier_name,order_date,status,product_cost_bdt,china_shipping_bdt,cnf_bdt,
      customs_duty_bdt,vat_bdt,agent_fees_bdt,local_transport_bdt,other_bdt,total_landed,total_qty,cost_per_unit,notes)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [p.supplierName,p.orderDate,p.status,p.productCostBDT||0,p.chinaShippingBDT||0,p.cnfBDT||0,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [t,p.supplierName,p.orderDate,p.status,p.productCostBDT||0,p.chinaShippingBDT||0,p.cnfBDT||0,
      p.customsDutyBDT||0,p.vatBDT||0,p.agentFeesBDT||0,p.localTransportBDT||0,p.otherBDT||0,
      p.totalLanded||0,p.totalQty||0,p.costPerUnit||0,p.notes||""]);
   const poId = r.insertId;
   for (const item of (p.items||[]))
-    await q("INSERT INTO purchase_items (purchase_id,product_id,qty) VALUES (?,?,?)", [poId, item.productId||null, item.qty||0]);
+    await tq(req, "INSERT INTO purchase_items (tenant_id,purchase_id,product_id,qty) VALUES (?,?,?,?)", [t, poId, item.productId||null, item.qty||0]);
   res.json({ ...p, id: poId });
 });
 app.put("/api/purchases/:id/status", async (req, res) => {
-  const { status } = req.body;
-  await q("UPDATE purchases SET status=? WHERE id=?", [status, req.params.id]);
+  const { status } = req.body, t = tenantId(req);
+  await tq(req, "UPDATE purchases SET status=? WHERE id=? AND tenant_id=?", [status, req.params.id, t]);
   if (status === "received") {
-    const [[po]] = await q("SELECT * FROM purchases WHERE id=?", [req.params.id]);
-    const [items] = await q("SELECT * FROM purchase_items WHERE purchase_id=?", [req.params.id]);
+    const [[po]] = await tq(req, "SELECT * FROM purchases WHERE id=? AND tenant_id=?", [req.params.id, t]);
+    const [items] = await tq(req, "SELECT * FROM purchase_items WHERE purchase_id=? AND tenant_id=?", [req.params.id, t]);
     if (po && items.length > 0)
       for (const item of items)
         if (item.product_id) {
-          await q("UPDATE products SET stock = stock + ?, buy = ? WHERE id = ?",
-            [item.qty, Math.round(po.cost_per_unit), item.product_id]);
-          await logStockChange(item.product_id, item.qty, "purchase_received", `PO-${req.params.id}`, "");
+          await tq(req, "UPDATE products SET stock = stock + ?, buy = ? WHERE id = ? AND tenant_id=?",
+            [item.qty, Math.round(po.cost_per_unit), item.product_id, t]);
+          await logStockChange(item.product_id, item.qty, "purchase_received", `PO-${req.params.id}`, "", t);
         }
   }
   res.json({ ok: true });

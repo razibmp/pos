@@ -24,6 +24,8 @@ teardown(){
          DELETE x FROM stock_history x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM expenses x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM categories x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM purchase_items x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM purchases x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM users x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE FROM tenants WHERE slug LIKE 'isotest\_%';" >/dev/null 2>&1 || true
 }
@@ -88,4 +90,16 @@ A_EXP=$(curl -s "$BASE/api/expenses" -H "Authorization: Bearer $TA" | first_id)
 curl -s -X DELETE "$BASE/api/expenses/$A_EXP" -H "Authorization: Bearer $TB" >/dev/null
 [ "$(curl -s "$BASE/api/expenses" -H "Authorization: Bearer $TA" | names)" = "ISO-ExpA" ] || fail "cross-tenant delete removed A's expense"
 
-echo "✅ PASS — tenant isolation holds for sales + products + categories + expenses"
+# ── PURCHASES ─────────────────────────────────────────────────────────────────
+sups(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a.map(x=>x.supplier_name).sort().join(','))})"; }
+firststatus(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(String(JSON.parse(s)[0].status)))"; }
+curl -s -X POST "$BASE/api/purchases" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" -d '{"supplierName":"ISO-SupA","orderDate":"2026-01-01","status":"pending","items":[]}' >/dev/null
+curl -s -X POST "$BASE/api/purchases" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"supplierName":"ISO-SupB","orderDate":"2026-01-01","status":"pending","items":[]}' >/dev/null
+[ "$(curl -s "$BASE/api/purchases" -H "Authorization: Bearer $TA" | sups)" = "ISO-SupA" ] || fail "A sees foreign purchases"
+[ "$(curl -s "$BASE/api/purchases" -H "Authorization: Bearer $TB" | sups)" = "ISO-SupB" ] || fail "B sees foreign purchases"
+# B must not be able to flip A's purchase status (scoped UPDATE)
+A_PO=$(curl -s "$BASE/api/purchases" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X PUT "$BASE/api/purchases/$A_PO/status" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"status":"received"}' >/dev/null
+[ "$(curl -s "$BASE/api/purchases" -H "Authorization: Bearer $TA" | firststatus)" = "pending" ] || fail "cross-tenant status update mutated A's purchase"
+
+echo "✅ PASS — tenant isolation holds for sales + products + categories + expenses + purchases"
