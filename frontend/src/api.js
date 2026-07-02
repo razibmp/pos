@@ -33,6 +33,10 @@ export const login = async (d) => {
   if (r && r.token) setToken(r.token);
   return r;
 };
+// Integration settings (Owner only)
+export const getSettings   = ()       => api("/settings");
+export const saveSettings  = (key,d)  => api(`/settings/${key}`, { method: "PUT", body: d });
+
 export const getUsers      = ()     => api("/users");
 export const addUser       = (d)    => api("/users", { method: "POST", body: d });
 export const updateUser    = (id,d) => api(`/users/${id}`, { method: "PUT", body: d });
