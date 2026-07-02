@@ -132,6 +132,13 @@ async function initDB() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Integration settings — one JSON blob per integration key (pathao, woocommerce, googlesheet)
+  await q(`CREATE TABLE IF NOT EXISTS settings (
+    k          VARCHAR(60) PRIMARY KEY,
+    v          TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  )`);
+
   await q(`CREATE TABLE IF NOT EXISTS purchases (
     id                  INT AUTO_INCREMENT PRIMARY KEY,
     supplier_name       VARCHAR(200) NOT NULL,
@@ -480,6 +487,56 @@ app.put("/api/users/:id", requireRole("Owner"), async (req, res) => {
 app.delete("/api/users/:id", requireRole("Owner"), async (req, res) => {
   await q("DELETE FROM users WHERE id=?", [req.params.id]);
   res.json({ ok: true });
+});
+
+// ── INTEGRATION SETTINGS (Owner only) ────────────────────────────────────────
+// Secret fields are never echoed back in plaintext — the client sees SECRET_MASK
+// when a value is stored, and only overwrites it by sending a fresh value.
+const SECRET_MASK = "__SET__";
+const SECRET_FIELDS = new Set([
+  "client_secret","password","secret","consumer_secret","webhook_secret",
+  "api_key","service_account_json","access_token",
+]);
+const INTEGRATION_KEYS = new Set(["pathao","woocommerce","googlesheet"]);
+const maskSecrets = (obj={}) => {
+  const out = {};
+  for (const [k,val] of Object.entries(obj))
+    out[k] = (SECRET_FIELDS.has(k) && val) ? SECRET_MASK : val;
+  return out;
+};
+async function readSetting(key) {
+  const [[row]] = await q("SELECT v FROM settings WHERE k=?", [key]);
+  try { return row ? JSON.parse(row.v) : {}; } catch { return {}; }
+}
+app.get("/api/settings", requireRole("Owner"), async (_req, res) => {
+  try {
+    const [rows] = await q("SELECT k,v FROM settings");
+    const out = {};
+    for (const key of INTEGRATION_KEYS) out[key] = {};
+    for (const { k, v } of rows) {
+      try { out[k] = maskSecrets(JSON.parse(v)); } catch { out[k] = {}; }
+    }
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put("/api/settings/:key", requireRole("Owner"), async (req, res) => {
+  const key = req.params.key;
+  if (!INTEGRATION_KEYS.has(key)) return res.status(400).json({ error: "Unknown integration" });
+  try {
+    const existing = await readSetting(key);
+    const incoming = req.body && typeof req.body === "object" ? req.body : {};
+    const merged = { ...existing };
+    for (const [k, val] of Object.entries(incoming)) {
+      // Keep the stored secret if the client sent back the mask sentinel
+      if (SECRET_FIELDS.has(k) && val === SECRET_MASK) continue;
+      merged[k] = val;
+    }
+    await q(
+      "INSERT INTO settings (k,v) VALUES (?,?) ON DUPLICATE KEY UPDATE v=VALUES(v)",
+      [key, JSON.stringify(merged)]
+    );
+    res.json(maskSecrets(merged));
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── CATEGORIES ───────────────────────────────────────────────────────────────

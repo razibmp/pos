@@ -12,7 +12,7 @@ const EXP_CATS = {
   misc:{label:"Misc",icon:"📋",color:"#6B7280"},
 };
 const ROLE_PERMS = {
-  Owner:  {tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","users","deliveries","stock-history","woocommerce","preorders","orders"],seeFinancials:true},
+  Owner:  {tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","users","deliveries","stock-history","woocommerce","preorders","orders","settings"],seeFinancials:true},
   Manager:{tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","deliveries","stock-history","woocommerce","preorders","orders"],seeFinancials:true},
   Staff:  {tabs:["sales","inventory"],seeFinancials:false},
 };
@@ -22,9 +22,9 @@ const loadSession  = ()  => { try { const s=localStorage.getItem(SESSION_KEY); r
 const clearSession = ()  => { try { localStorage.removeItem(SESSION_KEY); } catch {} };
 
 const css = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* System font stack — zero network fetch, instant first paint */
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:transparent;color:#1D1D1F;-webkit-font-smoothing:antialiased}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#F5F5F7;color:#1D1D1F;-webkit-font-smoothing:antialiased}
 @keyframes su{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -38,12 +38,10 @@ button:active{transform:scale(.98)}
 .split31{display:grid;grid-template-columns:3fr 2fr;gap:16px}
 .ovx{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:13px}
-/* ── app background — fixed on desktop, scroll on mobile (iOS fix) ── */
+/* ── app background — clean minimal, no external image ── */
 .app-bg{
   min-height:100vh;
-  background-image:linear-gradient(rgba(0,0,0,.38),rgba(0,0,0,.38)),url('https://cdn-6.motorsport.com/images/mgl/YpbP1a30/s1200/lewis-hamilton-ferrari.webp');
-  background-size:cover;background-position:center top;
-  background-attachment:fixed;background-repeat:no-repeat;
+  background:#F5F5F7;
 }
 /* ── login card sections ── */
 .login-hd{padding:36px 32px 32px}
@@ -57,7 +55,6 @@ table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{padding:7px 8px!important}
 }
 @media(max-width:480px){
-  .app-bg{background-attachment:scroll}
   .grid2,.grid3,.grid4,.grid5{grid-template-columns:1fr 1fr}
   .grid3.xs-1,.grid4.xs-1,.grid5.xs-1{grid-template-columns:1fr}
   .login-hd{padding:26px 20px 22px!important}
@@ -76,10 +73,10 @@ const Toast=({msg,onDone})=>{
   useEffect(()=>{const t=setTimeout(onDone,2800);return()=>clearTimeout(t)},[onDone]);
   return <div style={{position:"fixed",bottom:28,left:"50%",transform:"translateX(-50%)",background:"rgba(29,29,31,.92)",backdropFilter:"blur(12px)",color:"#fff",padding:"11px 22px",borderRadius:20,fontWeight:600,fontSize:13,zIndex:9999,boxShadow:"0 4px 24px rgba(0,0,0,.18)",animation:"su .2s ease",whiteSpace:"nowrap",letterSpacing:"-.01em"}}>{msg}</div>;
 };
-const Card=({children,style})=><div className="card" style={{background:"rgba(255,255,255,.93)",borderRadius:18,padding:"18px 20px",boxShadow:"0 1px 3px rgba(0,0,0,.08),0 4px 24px rgba(0,0,0,.12)",border:"1px solid rgba(255,255,255,.6)",...style}}>{children}</div>;
+const Card=({children,style})=><div className="card" style={{background:"#fff",borderRadius:16,padding:"18px 20px",boxShadow:"0 1px 2px rgba(0,0,0,.05)",border:"1px solid #ECECEF",...style}}>{children}</div>;
 const CT=({children,action})=><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,gap:8}}><div style={{fontSize:15,fontWeight:700,letterSpacing:"-.02em",color:"#1D1D1F"}}>{children}</div>{action&&<div style={{flexShrink:0}}>{action}</div>}</div>;
 const SC=({icon,label,value,sub,accent="#FF6B35"})=>(
-  <div style={{background:"rgba(255,255,255,.93)",borderRadius:16,padding:"16px 18px",boxShadow:"0 1px 3px rgba(0,0,0,.08),0 4px 24px rgba(0,0,0,.12)",border:"1px solid rgba(255,255,255,.6)"}}>
+  <div style={{background:"#fff",borderRadius:14,padding:"16px 18px",boxShadow:"0 1px 2px rgba(0,0,0,.05)",border:"1px solid #ECECEF"}}>
     <div style={{width:32,height:32,borderRadius:10,background:accent+"15",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,marginBottom:10}}>{icon}</div>
     <div style={{fontSize:11,fontWeight:600,color:"#6E6E73",marginBottom:4,letterSpacing:"-.01em"}}>{label}</div>
     <div style={{fontSize:22,fontWeight:700,color:"#1D1D1F",lineHeight:1.1,letterSpacing:"-.03em"}}>{value}</div>
@@ -87,6 +84,40 @@ const SC=({icon,label,value,sub,accent="#FF6B35"})=>(
   </div>
 );
 const Bar=({value,max,color})=>{const w=max>0?Math.min(100,(value/max)*100):0;return <div style={{height:5,borderRadius:4,background:"#F2F2F7",overflow:"hidden",flex:1}}><div style={{height:"100%",width:w+"%",background:color||"#FF6B35",borderRadius:4,transition:"width .5s ease"}}/></div>};
+// ── DONUT / PIE CHART (pure SVG, no dependency) ──────────────────────────────
+// data: [{label, value, color}].  center: optional {big, small} shown in the hole.
+const Donut=({data=[],size=176,thickness=26,center})=>{
+  const items=data.filter(d=>(+d.value||0)>0);
+  const total=items.reduce((a,d)=>a+(+d.value||0),0);
+  const r=(size-thickness)/2, C=2*Math.PI*r, cx=size/2;
+  let offset=0;
+  return <div style={{display:"flex",alignItems:"center",gap:18,flexWrap:"wrap"}}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{flexShrink:0}}>
+      <circle cx={cx} cy={cx} r={r} fill="none" stroke="#F2F2F7" strokeWidth={thickness}/>
+      {total>0&&items.map((d,i)=>{
+        const frac=(+d.value)/total, len=frac*C;
+        const seg=<circle key={i} cx={cx} cy={cx} r={r} fill="none" stroke={d.color} strokeWidth={thickness}
+          strokeDasharray={`${len} ${C-len}`} strokeDashoffset={-offset}
+          transform={`rotate(-90 ${cx} ${cx})`} strokeLinecap="butt"/>;
+        offset+=len; return seg;
+      })}
+      {center&&<>
+        <text x={cx} y={cx-2} textAnchor="middle" style={{fontSize:20,fontWeight:800,fill:"#1D1D1F"}}>{center.big}</text>
+        <text x={cx} y={cx+16} textAnchor="middle" style={{fontSize:10,fontWeight:600,fill:"#8E8E93"}}>{center.small}</text>
+      </>}
+    </svg>
+    <div style={{display:"flex",flexDirection:"column",gap:7,flex:1,minWidth:130}}>
+      {items.length===0?<Empty msg="No data yet"/>:items.map((d,i)=>{
+        const p=total>0?Math.round((+d.value/total)*100):0;
+        return <div key={i} style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{width:10,height:10,borderRadius:3,background:d.color,flexShrink:0}}/>
+          <span style={{fontSize:12,fontWeight:600,color:"#3C3C43",flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.label}</span>
+          <span style={{fontSize:12,fontWeight:700,color:"#6E6E73"}}>{p}%</span>
+        </div>;
+      })}
+    </div>
+  </div>;
+};
 const Pill=({children,bg="#F2F2F7",color="#3C3C43"})=><span style={{background:bg,color,fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,display:"inline-block",whiteSpace:"nowrap",letterSpacing:"-.01em"}}>{children}</span>;
 const FI=({label,...p})=>{
   const [f,sf]=useState(false);
@@ -118,8 +149,7 @@ function Login({onLogin}){
     catch(e){setErr(e.message);}
     finally{setLoading(false);}
   };
-  return <div style={{minHeight:"100vh",backgroundImage:"url('https://media.formula1.com/image/upload/t_16by9Centre/c_lfill,w_3392/q_auto/v1740000001/fom-website/2025/Miscellaneous/GettyImages-1322158873.webp')",backgroundSize:"cover",backgroundPosition:"center",backgroundRepeat:"no-repeat",backgroundAttachment:"scroll",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px",position:"relative"}}>
-    <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.52)",backdropFilter:"blur(2px)"}}/>
+  return <div style={{minHeight:"100vh",background:"#F5F5F7",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"16px",position:"relative"}}>
     <div style={{position:"relative",zIndex:1,width:"100%",display:"flex",flexDirection:"column",alignItems:"center"}}>
     <style>{css}</style>
     <div className="login-wrap" style={{width:"100%",maxWidth:400,animation:"su .35s ease",padding:"0 4px"}}>
@@ -143,8 +173,8 @@ function Login({onLogin}){
         </div>
       </div>
       <div style={{textAlign:"center",marginTop:20,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
-        <div style={{fontSize:12,color:"rgba(255,255,255,.45)",fontWeight:500,letterSpacing:".01em"}}>© 2026 · Internal Use Only</div>
-        <div style={{fontSize:13,color:"rgba(255,255,255,.8)",fontWeight:600,letterSpacing:".01em",textShadow:"0 1px 6px rgba(0,0,0,.6)"}}>
+        <div style={{fontSize:12,color:"#AEAEB2",fontWeight:500,letterSpacing:".01em"}}>© 2026 · Internal Use Only</div>
+        <div style={{fontSize:13,color:"#6E6E73",fontWeight:600,letterSpacing:".01em"}}>
           Made with <span style={{color:"#EF476F",fontSize:14}}>❤️</span> by{" "}
           <span style={{color:"#FF6B35"}}>The Hobby Center</span>
         </div>
@@ -267,6 +297,16 @@ function Dashboard({products,sales,expenses,purchases,deliveries,deliveryStats})
     <div className="split31">
       <Card>
         <CT>📊 Today's Breakdown</CT>
+        <div style={{marginBottom:16,paddingBottom:16,borderBottom:"1px solid #F2F2F7"}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#8E8E93",marginBottom:12,textTransform:"uppercase",letterSpacing:".04em"}}>Where your money goes</div>
+          <Donut center={{big:pct(net,revenue)+"%",small:"net margin"}} data={[
+            {label:"Cost of Goods",value:cog,color:"#FFD166"},
+            {label:"Salary",value:salary,color:"#EF476F"},
+            {label:"Office / Rent",value:office,color:"#8B5CF6"},
+            {label:"Other Costs",value:otherE,color:"#3B82F6"},
+            {label:"Net Profit",value:Math.max(0,net),color:"#06D6A0"},
+          ]}/>
+        </div>
         <div style={{display:"flex",flexDirection:"column",gap:11}}>
           {[["Walk-in Sales",walkInRevenue,"#FF6B35"],["Pathao (Product)",pathaoRevenue,"#3B82F6"],["Delivery Income",deliveryIncome,"#06D6A0"],["Cost of Goods",cog,"#FFD166"],["Salary",salary,"#EF476F"],["Office/Rent",office,"#8B5CF6"],["Other Costs",otherE,"#06D6A0"]].map(([l,v,c])=>
             <div key={l} style={{display:"flex",alignItems:"center",gap:10}}><div style={{fontSize:11,fontWeight:700,color:"#6B7280",minWidth:110}}>{l}</div><Bar value={v} max={maxB} color={c}/><div style={{fontSize:12,fontWeight:800,color:"#1A1A2E",minWidth:72,textAlign:"right"}}>{fmt(v)}</div></div>)}
@@ -1674,7 +1714,7 @@ function Orders({sales,deliveries,pendingOrders,products,reload,toast}){
 }
 
 // ── SETTINGS ─────────────────────────────────────────────────────────────────
-function Settings({toast}){
+function WebhookHelp({toast}){
   const [sending,setSending]=useState(false);
   const host=window.location.hostname;
   const webhookUrl=`https://${host}/api/webhook/pathao`;
@@ -1744,25 +1784,89 @@ function Settings({toast}){
       </div>
     </Card>
 
-    <Card>
-      <CT>🔑 API Credentials</CT>
-      <div style={{display:"flex",flexDirection:"column",gap:8}}>
-        {[
-          ["Pathao Client ID", "nXe0R0vbxr"],
-          ["Pathao Store ID", "76249"],
-          ["Pathao Zone", "Mirpur 12 (ID: 57)"],
-          ["Pathao City", "Dhaka (ID: 1)"],
-          ["Sender Phone", "01839000021"],
-        ].map(([l,v])=><div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:"#FFF8F0",borderRadius:9,border:"1px solid #F0E6D3"}}>
-          <span style={{fontSize:12,fontWeight:700,color:"#6B7280"}}>{l}</span>
-          <code style={{fontSize:12,color:"#1A1A2E",fontFamily:"monospace"}}>{v}</code>
-        </div>)}
-      </div>
-    </Card>
   </div>;
 }
 
-// ── ROOT ─────────────────────────────────────────────────────────────────────
+// ── SETTINGS / INTEGRATIONS ──────────────────────────────────────────────────
+const MASK="__SET__";
+const INTEGRATIONS=[
+  {key:"pathao",icon:"🛵",name:"Pathao Courier",desc:"Auto-create parcels & track delivery status.",
+   fields:[
+     {k:"base_url",label:"API Base URL",ph:"https://api-hermes.pathao.com"},
+     {k:"client_id",label:"Client ID"},
+     {k:"client_secret",label:"Client Secret",secret:true},
+     {k:"username",label:"Username / Email"},
+     {k:"password",label:"Password",secret:true},
+     {k:"store_id",label:"Store ID"},
+     {k:"webhook_secret",label:"Webhook Secret",secret:true},
+   ]},
+  {key:"woocommerce",icon:"🛒",name:"WooCommerce / WordPress",desc:"Sync products & pull online orders from your site.",
+   fields:[
+     {k:"url",label:"Store URL",ph:"https://yourshop.com"},
+     {k:"key",label:"Consumer Key"},
+     {k:"secret",label:"Consumer Secret",secret:true},
+     {k:"webhook_secret",label:"Webhook Secret",secret:true},
+   ]},
+  {key:"googlesheet",icon:"📄",name:"Google Sheet",desc:"Export sales & orders into a Google Sheet.",
+   fields:[
+     {k:"sheet_url",label:"Sheet URL",ph:"https://docs.google.com/spreadsheets/..."},
+     {k:"sheet_id",label:"Sheet ID"},
+     {k:"service_account_json",label:"Service Account JSON",secret:true},
+   ]},
+];
+function IntegrationCard({cfg,initial,toast}){
+  const [data,setData]=useState(()=>({enabled:false,...initial}));
+  const [saving,setSaving]=useState(false);
+  const set=(k,v)=>setData(d=>({...d,[k]:v}));
+  const save=async()=>{
+    setSaving(true);
+    try{const saved=await API.saveSettings(cfg.key,data);setData(d=>({...d,...saved}));toast("✅ "+cfg.name+" saved");}
+    catch(e){toast("❌ "+e.message);}
+    finally{setSaving(false);}
+  };
+  return <Card>
+    <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+      <div style={{width:40,height:40,borderRadius:11,background:"#F5F5F7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{cfg.icon}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:15,fontWeight:700,letterSpacing:"-.02em"}}>{cfg.name}</div>
+        <div style={{fontSize:12,color:"#8E8E93"}}>{cfg.desc}</div>
+      </div>
+      <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",flexShrink:0}}>
+        <span style={{fontSize:12,fontWeight:600,color:data.enabled?"#06D6A0":"#AEAEB2"}}>{data.enabled?"On":"Off"}</span>
+        <span onClick={()=>set("enabled",!data.enabled)} style={{width:42,height:24,borderRadius:12,background:data.enabled?"#06D6A0":"#D2D2D7",position:"relative",transition:"background .2s"}}>
+          <span style={{position:"absolute",top:2,left:data.enabled?20:2,width:20,height:20,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
+        </span>
+      </label>
+    </div>
+    <div className="grid2" style={{gap:10}}>
+      {cfg.fields.map(f=>{
+        const isSecretSet=f.secret&&data[f.k]===MASK;
+        return <FI key={f.k} label={f.label} type={f.secret&&!isSecretSet?"password":"text"}
+          value={isSecretSet?"":(data[f.k]||"")}
+          placeholder={isSecretSet?"•••••••• (saved — leave blank to keep)":(f.ph||"")}
+          onChange={e=>set(f.k,e.target.value)}
+          onFocus={()=>{if(isSecretSet)set(f.k,"")}}/>;
+      })}
+    </div>
+    <div style={{display:"flex",gap:10,marginTop:14}}>
+      <Btn onClick={save} disabled={saving}>{saving?"Saving…":"💾 Save"}</Btn>
+    </div>
+  </Card>;
+}
+function Settings({toast}){
+  const [cfg,setCfg]=useState(null);
+  useEffect(()=>{API.getSettings().then(setCfg).catch(e=>{toast("❌ "+e.message);setCfg({});});},[]);
+  if(!cfg)return <Empty msg="Loading settings…"/>;
+  return <div style={{display:"flex",flexDirection:"column",gap:16}}>
+    <Card style={{background:"linear-gradient(135deg,#1A1A2E,#2D2D5E)",border:"none",color:"#fff"}}>
+      <div style={{fontSize:16,fontWeight:700,letterSpacing:"-.02em"}}>⚙️ Integrations</div>
+      <div style={{fontSize:13,color:"rgba(255,255,255,.7)",marginTop:4}}>Connect or disconnect the services your business uses. Secrets are stored securely and never shown again after saving.</div>
+    </Card>
+    {INTEGRATIONS.map(i=><IntegrationCard key={i.key} cfg={i} initial={cfg[i.key]||{}} toast={toast}/>)}
+    <WebhookHelp toast={toast}/>
+  </div>;
+}
+
 export default function App(){
   const [user,setUser]=useState(()=>loadSession());
   const [products,setProducts]=useState([]);const [sales,setSales]=useState([]);
@@ -1834,6 +1938,7 @@ export default function App(){
     {id:"woocommerce",label:"WooCommerce",icon:"🛒"},
     {id:"preorders",label:"Pre-Orders",icon:"📋"},
     {id:"orders",label:"Orders",icon:"📬"},
+    {id:"settings",label:"Settings",icon:"⚙️"},
   ];
   const TABS=ALL_TABS.filter(tb=>perms.tabs.includes(tb.id));
   const at=TABS.find(tb=>tb.id===tab)?tab:TABS[0]?.id;
@@ -1882,6 +1987,7 @@ export default function App(){
       {at==="orders"&&<Orders sales={sales} deliveries={deliveries} pendingOrders={pendingOrders} products={products} reload={loadAll} toast={t}/>}
       {at==="fb-orders"&&<FBOrders sales={sales} toast={t}/>}
       {at==="stock-history"&&<StockHistory stockHistory={stockHistory} products={products} reload={loadAll}/>}
+      {at==="settings"&&<Settings toast={t}/>}
     </div>
 
     {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
