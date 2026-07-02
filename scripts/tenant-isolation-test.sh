@@ -29,6 +29,8 @@ teardown(){
          DELETE x FROM payout_deliveries x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM pathao_payouts x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM deliveries x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM pending_orders x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM preorders x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM users x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE FROM tenants WHERE slug LIKE 'isotest\_%';" >/dev/null 2>&1 || true
 }
@@ -119,4 +121,23 @@ A_DEL=$(curl -s "$BASE/api/deliveries" -H "Authorization: Bearer $TA" | first_id
 curl -s -X DELETE "$BASE/api/deliveries/$A_DEL" -H "Authorization: Bearer $TB" >/dev/null
 [ "$(curl -s "$BASE/api/deliveries" -H "Authorization: Bearer $TA" | recips)" = "ISO-DelA" ] || fail "cross-tenant delete removed A's delivery"
 
-echo "✅ PASS — tenant isolation holds for sales + products + categories + expenses + purchases + deliveries"
+# ── PENDING ORDERS (via public order form, tenant chosen by X-Tenant) ─────────
+custs(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a.map(x=>x.customer_name).sort().join(','))})"; }
+curl -s -X POST "$BASE/api/orders/public" -H "Content-Type: application/json" -H "X-Tenant: isotest_a" -d '{"customer_name":"ISO-PoA","customer_phone":"01700000000"}' >/dev/null
+curl -s -X POST "$BASE/api/orders/public" -H "Content-Type: application/json" -H "X-Tenant: isotest_b" -d '{"customer_name":"ISO-PoB","customer_phone":"01800000000"}' >/dev/null
+[ "$(curl -s "$BASE/api/pending-orders" -H "Authorization: Bearer $TA" | custs)" = "ISO-PoA" ] || fail "A sees foreign pending-orders"
+[ "$(curl -s "$BASE/api/pending-orders" -H "Authorization: Bearer $TB" | custs)" = "ISO-PoB" ] || fail "B sees foreign pending-orders"
+A_PO2=$(curl -s "$BASE/api/pending-orders" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/pending-orders/$A_PO2" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/pending-orders" -H "Authorization: Bearer $TA" | custs)" = "ISO-PoA" ] || fail "cross-tenant delete removed A's pending-order"
+
+# ── PRE-ORDERS (seeded directly; sync needs a Google Sheet) ───────────────────
+DB -e "INSERT INTO preorders (tenant_id,sheet_row,customer_name,month,status) SELECT id,1,'ISO-PreA','Jan 2026','pending' FROM tenants WHERE slug='isotest_a';
+       INSERT INTO preorders (tenant_id,sheet_row,customer_name,month,status) SELECT id,1,'ISO-PreB','Jan 2026','pending' FROM tenants WHERE slug='isotest_b';" >/dev/null 2>&1
+[ "$(curl -s "$BASE/api/preorders" -H "Authorization: Bearer $TA" | custs)" = "ISO-PreA" ] || fail "A sees foreign preorders"
+[ "$(curl -s "$BASE/api/preorders" -H "Authorization: Bearer $TB" | custs)" = "ISO-PreB" ] || fail "B sees foreign preorders"
+A_PRE=$(curl -s "$BASE/api/preorders" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/preorders/$A_PRE" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/preorders" -H "Authorization: Bearer $TA" | custs)" = "ISO-PreA" ] || fail "cross-tenant delete removed A's preorder"
+
+echo "✅ PASS — isolation holds: sales, products, categories, expenses, purchases, deliveries, pending-orders, preorders"
