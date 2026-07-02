@@ -818,9 +818,9 @@ app.delete("/api/stakeholders/transactions/:id", async (req, res) => {
 
 
 // ── DELIVERIES / PATHAO ───────────────────────────────────────────────────────
-app.get("/api/deliveries", async (_, res) => {
+app.get("/api/deliveries", async (req, res) => {
   try {
-    const [rows] = await q("SELECT * FROM deliveries ORDER BY id DESC");
+    const [rows] = await tq(req, "SELECT * FROM deliveries WHERE tenant_id=? ORDER BY id DESC", [tenantId(req)]);
     res.json(rows.map(r => ({
       ...r,
       created_at: r.created_at?.toISOString?.().split("T")[0] || r.created_at,
@@ -832,7 +832,7 @@ app.get("/api/deliveries", async (_, res) => {
 
 app.post("/api/deliveries", async (req, res) => {
   try {
-    const d = req.body;
+    const d = req.body, t = tenantId(req);
     // Create order on Pathao
     const pathaoRes = await Pathao.createOrder({
       merchant_order_id : d.merchant_order_id,
@@ -865,23 +865,23 @@ app.post("/api/deliveries", async (req, res) => {
 
     // Deduct stock if product_id is provided
     if (d.product_id) {
-      await q("UPDATE products SET stock = stock - ? WHERE id = ?", [d.item_quantity||1, d.product_id]);
-      await logStockChange(d.product_id, -(d.item_quantity||1), "pathao_delivery", inv, d.created_by||"");
+      await tq(req, "UPDATE products SET stock = stock - ? WHERE id = ? AND tenant_id=?", [d.item_quantity||1, d.product_id, t]);
+      await logStockChange(d.product_id, -(d.item_quantity||1), "pathao_delivery", inv, d.created_by||"", t);
     }
-    const [saleRow] = await q(
-      `INSERT INTO sales (inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,payment,sold_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [inv, today, timeNow, d.product_id||null, d.item_description||"Pathao Order", "🛵",
+    const [saleRow] = await tq(req,
+      `INSERT INTO sales (tenant_id,inv,date,time,product_id,product_name,emoji,qty,price,buy_price,total,profit,customer,payment,sold_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [t, inv, today, timeNow, d.product_id||null, d.item_description||"Pathao Order", "🛵",
        d.item_quantity||1, product_price, buy_price, product_price, profit,
        d.recipient_name, "Pathao COD", d.created_by||""]
     );
     const sale_id = saleRow.insertId;
 
-    const [r] = await q(
-      `INSERT INTO deliveries (sale_id,consignment_id,merchant_order_id,recipient_name,recipient_phone,
+    const [r] = await tq(req,
+      `INSERT INTO deliveries (tenant_id,sale_id,consignment_id,merchant_order_id,recipient_name,recipient_phone,
        recipient_address,amount_to_collect,item_description,item_quantity,item_weight,note,status,pathao_status,delivery_type,delivery_charge)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [sale_id, consignment_id, inv, d.recipient_name, d.recipient_phone,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [t, sale_id, consignment_id, inv, d.recipient_name, d.recipient_phone,
        d.recipient_address, d.amount_to_collect, d.item_description||"", d.item_quantity||1,
        d.item_weight||0.5, d.note||"", "pending", pathao_status, d.delivery_type||"inside", delivery_charge]
     );
@@ -901,7 +901,8 @@ app.post("/api/deliveries", async (req, res) => {
 
 app.get("/api/deliveries/:id/sync", async (req, res) => {
   try {
-    const [[delivery]] = await q("SELECT * FROM deliveries WHERE id=?", [req.params.id]);
+    const t = tenantId(req);
+    const [[delivery]] = await tq(req, "SELECT * FROM deliveries WHERE id=? AND tenant_id=?", [req.params.id, t]);
     if (!delivery) return res.status(404).json({ error: "Not found" });
     if (!delivery.consignment_id) return res.status(400).json({ error: "No consignment ID" });
 
@@ -911,8 +912,8 @@ app.get("/api/deliveries/:id/sync", async (req, res) => {
       const status = pathao_status?.toLowerCase().includes("deliver") ? "delivered"
                    : pathao_status?.toLowerCase().includes("cancel") ? "cancelled"
                    : "pending";
-      await q("UPDATE deliveries SET pathao_status=?, status=? WHERE id=?",
-        [pathao_status, status, req.params.id]);
+      await tq(req, "UPDATE deliveries SET pathao_status=?, status=? WHERE id=? AND tenant_id=?",
+        [pathao_status, status, req.params.id, t]);
       res.json({ ok: true, pathao_status, status });
     } else {
       res.status(400).json({ error: "Pathao sync failed", response: pathaoRes.body });
@@ -923,41 +924,42 @@ app.get("/api/deliveries/:id/sync", async (req, res) => {
 
 app.put("/api/deliveries/:id/cancel", async (req, res) => {
   try {
+    const t = tenantId(req);
     // Get the delivery to find its sale_id
-    const [[delivery]] = await q("SELECT * FROM deliveries WHERE id=?", [req.params.id]);
+    const [[delivery]] = await tq(req, "SELECT * FROM deliveries WHERE id=? AND tenant_id=?", [req.params.id, t]);
     if (!delivery) return res.status(404).json({ error: "Not found" });
     // Delete the linked sale so it disappears from revenue
     if (delivery.sale_id) {
-      await q("DELETE FROM sales WHERE id=?", [delivery.sale_id]);
+      await tq(req, "DELETE FROM sales WHERE id=? AND tenant_id=?", [delivery.sale_id, t]);
     }
     // Restore stock if product was linked
     if (delivery.product_id) {
-      await q("UPDATE products SET stock = stock + ? WHERE id = ?", [delivery.item_quantity||1, delivery.product_id]);
-      await logStockChange(delivery.product_id, delivery.item_quantity||1, "delivery_cancelled", delivery.consignment_id||"", "");
+      await tq(req, "UPDATE products SET stock = stock + ? WHERE id = ? AND tenant_id=?", [delivery.item_quantity||1, delivery.product_id, t]);
+      await logStockChange(delivery.product_id, delivery.item_quantity||1, "delivery_cancelled", delivery.consignment_id||"", "", t);
     }
-    await q("UPDATE deliveries SET status='cancelled', pathao_status='Cancelled' WHERE id=?", [req.params.id]);
+    await tq(req, "UPDATE deliveries SET status='cancelled', pathao_status='Cancelled' WHERE id=? AND tenant_id=?", [req.params.id, t]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete("/api/deliveries/:id", async (req, res) => {
-  await q("DELETE FROM deliveries WHERE id=?", [req.params.id]);
+  await tq(req, "DELETE FROM deliveries WHERE id=? AND tenant_id=?", [req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 
 
-app.get("/api/delivery-stats", async (_, res) => {
+app.get("/api/delivery-stats", async (req, res) => {
   try {
-    const [[stats]] = await q(`
-      SELECT 
+    const [[stats]] = await tq(req, `
+      SELECT
         COALESCE(SUM(CASE WHEN status != 'cancelled' THEN delivery_charge ELSE 0 END), 0) as total_delivery_revenue,
         COALESCE(SUM(CASE WHEN status != 'cancelled' THEN amount_to_collect ELSE 0 END), 0) as total_cod,
         COUNT(CASE WHEN status = 'delivered' THEN 1 END) as delivered_count,
         COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_count,
         COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_count,
         COUNT(*) as total_count
-      FROM deliveries
-    `);
+      FROM deliveries WHERE tenant_id=?
+    `, [tenantId(req)]);
     res.json([{...stats, date: new Date().toISOString().split("T")[0]}]);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -990,11 +992,12 @@ app.get("/api/stock-history", async (req, res) => {
 // ── PATHAO PAYOUTS ────────────────────────────────────────────────────────────
 app.get("/api/payouts", async (req, res) => {
   try {
-    const [rows] = await q("SELECT * FROM pathao_payouts ORDER BY id DESC");
+    const t = tenantId(req);
+    const [rows] = await tq(req, "SELECT * FROM pathao_payouts WHERE tenant_id=? ORDER BY id DESC", [t]);
     for (const row of rows) {
-      const [items] = await q(
-        "SELECT pd.delivery_id, d.consignment_id, d.recipient_name, d.amount_to_collect, d.delivery_charge FROM payout_deliveries pd JOIN deliveries d ON d.id = pd.delivery_id WHERE pd.payout_id = ?",
-        [parseInt(row.id)]
+      const [items] = await tq(req,
+        "SELECT pd.delivery_id, d.consignment_id, d.recipient_name, d.amount_to_collect, d.delivery_charge FROM payout_deliveries pd JOIN deliveries d ON d.id = pd.delivery_id WHERE pd.payout_id = ? AND pd.tenant_id = ?",
+        [parseInt(row.id), t]
       );
       row.deliveries = items;
       row.date = row.date?.toISOString?.().split("T")[0] || row.date;
@@ -1005,15 +1008,15 @@ app.get("/api/payouts", async (req, res) => {
 
 app.post("/api/payouts", async (req, res) => {
   try {
-    const { payout_ref, amount, date, note, delivery_ids } = req.body;
-    const [r] = await q(
-      "INSERT INTO pathao_payouts (payout_ref,amount,date,note,status) VALUES (?,?,?,?,?)",
-      [payout_ref||"", amount, date, note||"", "received"]
+    const { payout_ref, amount, date, note, delivery_ids } = req.body, t = tenantId(req);
+    const [r] = await tq(req,
+      "INSERT INTO pathao_payouts (tenant_id,payout_ref,amount,date,note,status) VALUES (?,?,?,?,?,?)",
+      [t, payout_ref||"", amount, date, note||"", "received"]
     );
     const poId = r.insertId;
     for (const did of (delivery_ids||[])) {
-      await q("INSERT INTO payout_deliveries (payout_id,delivery_id) VALUES (?,?)", [poId, did]);
-      await q("UPDATE deliveries SET status='paid' WHERE id=?", [did]);
+      await tq(req, "INSERT INTO payout_deliveries (tenant_id,payout_id,delivery_id) VALUES (?,?,?)", [t, poId, did]);
+      await tq(req, "UPDATE deliveries SET status='paid' WHERE id=? AND tenant_id=?", [did, t]);
     }
     res.json({ id: poId, ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -1021,12 +1024,13 @@ app.post("/api/payouts", async (req, res) => {
 
 app.delete("/api/payouts/:id", async (req, res) => {
   try {
+    const t = tenantId(req);
     // Reset delivery status back to delivered
-    const [items] = await q("SELECT delivery_id FROM payout_deliveries WHERE payout_id=?", [req.params.id]);
+    const [items] = await tq(req, "SELECT delivery_id FROM payout_deliveries WHERE payout_id=? AND tenant_id=?", [req.params.id, t]);
     for (const item of items) {
-      await q("UPDATE deliveries SET status='delivered' WHERE id=?", [item.delivery_id]);
+      await tq(req, "UPDATE deliveries SET status='delivered' WHERE id=? AND tenant_id=?", [item.delivery_id, t]);
     }
-    await q("DELETE FROM pathao_payouts WHERE id=?", [req.params.id]);
+    await tq(req, "DELETE FROM pathao_payouts WHERE id=? AND tenant_id=?", [req.params.id, t]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1034,11 +1038,11 @@ app.delete("/api/payouts/:id", async (req, res) => {
 // Unpaid delivered deliveries (ready to be added to a payout)
 app.get("/api/payouts/unpaid", async (req, res) => {
   try {
-    const [rows] = await q(`
+    const [rows] = await tq(req, `
       SELECT * FROM deliveries
-      WHERE status = 'delivered'
+      WHERE status = 'delivered' AND tenant_id = ?
       ORDER BY id DESC
-    `);
+    `, [tenantId(req)]);
     res.json(rows.map(r=>({...r, amount_to_collect:+r.amount_to_collect, delivery_charge:+r.delivery_charge})));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

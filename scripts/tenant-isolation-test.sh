@@ -26,6 +26,9 @@ teardown(){
          DELETE x FROM categories x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM purchase_items x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM purchases x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM payout_deliveries x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM pathao_payouts x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM deliveries x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM users x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE FROM tenants WHERE slug LIKE 'isotest\_%';" >/dev/null 2>&1 || true
 }
@@ -102,4 +105,18 @@ A_PO=$(curl -s "$BASE/api/purchases" -H "Authorization: Bearer $TA" | first_id)
 curl -s -X PUT "$BASE/api/purchases/$A_PO/status" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"status":"received"}' >/dev/null
 [ "$(curl -s "$BASE/api/purchases" -H "Authorization: Bearer $TA" | firststatus)" = "pending" ] || fail "cross-tenant status update mutated A's purchase"
 
-echo "✅ PASS — tenant isolation holds for sales + products + categories + expenses + purchases"
+# ── DELIVERIES ────────────────────────────────────────────────────────────────
+# POST /api/deliveries calls the live Pathao API, so seed rows directly to test
+# the read/delete scope instead.
+recips(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a.map(x=>x.recipient_name).sort().join(','))})"; }
+DB -e "INSERT INTO deliveries (tenant_id,recipient_name,recipient_phone,recipient_address,amount_to_collect,delivery_charge,status,pathao_status)
+       SELECT id,'ISO-DelA','017','addr',100,80,'pending','Pending' FROM tenants WHERE slug='isotest_a';
+       INSERT INTO deliveries (tenant_id,recipient_name,recipient_phone,recipient_address,amount_to_collect,delivery_charge,status,pathao_status)
+       SELECT id,'ISO-DelB','018','addr',200,80,'pending','Pending' FROM tenants WHERE slug='isotest_b';" >/dev/null 2>&1
+[ "$(curl -s "$BASE/api/deliveries" -H "Authorization: Bearer $TA" | recips)" = "ISO-DelA" ] || fail "A sees foreign deliveries"
+[ "$(curl -s "$BASE/api/deliveries" -H "Authorization: Bearer $TB" | recips)" = "ISO-DelB" ] || fail "B sees foreign deliveries"
+A_DEL=$(curl -s "$BASE/api/deliveries" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/deliveries/$A_DEL" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/deliveries" -H "Authorization: Bearer $TA" | recips)" = "ISO-DelA" ] || fail "cross-tenant delete removed A's delivery"
+
+echo "✅ PASS — tenant isolation holds for sales + products + categories + expenses + purchases + deliveries"
