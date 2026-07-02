@@ -345,7 +345,60 @@ async function initDB() {
     await q("ALTER TABLE preorders ADD COLUMN IF NOT EXISTS due DECIMAL(12,2) DEFAULT 0");
   } catch(e) { /* columns may already exist */ }
 
+  await migrateTenants();
+
   console.log("✅ Database ready");
+}
+
+// ── PHASE 1: MULTI-TENANT FOUNDATION ──────────────────────────────────────────
+// Additive, non-destructive migration. Adds a `tenants` table and a `tenant_id`
+// column to every business table, backfilling existing rows to tenant 1 (THC).
+// Query logic is NOT yet tenant-scoped — that is Phase 2. See docs/SAAS-ARCHITECTURE.md.
+// Every ALTER is wrapped in try/catch so re-running is a no-op (idempotent).
+const TENANT_TABLES = [
+  "users","categories","products","sales","pending_orders","expenses","settings",
+  "purchases","purchase_items","stakeholders","stakeholder_transactions","deliveries",
+  "pathao_payouts","payout_deliveries","stock_history","wc_product_map","wc_orders",
+  "wc_sync_log","preorders",
+];
+async function migrateTenants() {
+  // 1. Tenant registry
+  await q(`CREATE TABLE IF NOT EXISTS tenants (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    slug       VARCHAR(40) UNIQUE NOT NULL,
+    name       VARCHAR(120) NOT NULL,
+    status     VARCHAR(20) NOT NULL DEFAULT 'active',
+    plan       VARCHAR(20) NOT NULL DEFAULT 'free',
+    branding   JSON,
+    db_dsn     VARCHAR(255) DEFAULT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // 2. Seed the existing shop as tenant id=1 so all current data belongs to it
+  const [[{cnt}]] = await q("SELECT COUNT(*) as cnt FROM tenants");
+  if (cnt === 0) {
+    await q(
+      "INSERT INTO tenants (id, slug, name, status, plan) VALUES (1, 'thc', 'The Hobby Center', 'active', 'pro')"
+    );
+    console.log("✅ Default tenant 'thc' (id=1) seeded");
+  }
+
+  // 3. Add tenant_id + index to every business table (existing rows backfill to 1)
+  let added = 0;
+  for (const t of TENANT_TABLES) {
+    try {
+      await q(`ALTER TABLE ${t} ADD COLUMN tenant_id INT NOT NULL DEFAULT 1`);
+      added++;
+    } catch(e) { /* column already exists */ }
+    try { await q(`ALTER TABLE ${t} ADD INDEX ix_${t}_tenant (tenant_id)`); } catch(e) {}
+  }
+  if (added > 0) console.log(`✅ tenant_id added to ${added} table(s)`);
+
+  // 4. Uniqueness must become per-tenant (two tenants may both have user "admin")
+  try { await q("ALTER TABLE users DROP INDEX username"); } catch(e) {}
+  try { await q("ALTER TABLE users ADD UNIQUE KEY uq_user_tenant (tenant_id, username)"); } catch(e) {}
+  try { await q("ALTER TABLE categories DROP INDEX name"); } catch(e) {}
+  try { await q("ALTER TABLE categories ADD UNIQUE KEY uq_cat_tenant (tenant_id, name)"); } catch(e) {}
 }
 
 
