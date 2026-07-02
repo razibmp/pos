@@ -22,6 +22,8 @@ teardown(){
   DB -e "DELETE x FROM sales x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM products x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM stock_history x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM expenses x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
+         DELETE x FROM categories x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE x FROM users x JOIN tenants t ON x.tenant_id=t.id WHERE t.slug LIKE 'isotest\_%';
          DELETE FROM tenants WHERE slug LIKE 'isotest\_%';" >/dev/null 2>&1 || true
 }
@@ -68,4 +70,22 @@ A_PROD=$(curl -s "$BASE/api/products" -H "Authorization: Bearer $TA" | first_id)
 curl -s -X DELETE "$BASE/api/products/$A_PROD" -H "Authorization: Bearer $TB" >/dev/null
 [ "$(curl -s "$BASE/api/products" -H "Authorization: Bearer $TA" | names)" = "ISO-AWidget" ] || fail "cross-tenant delete removed A's product"
 
-echo "✅ PASS — tenant isolation holds for the sales + products modules"
+# ── CATEGORIES ────────────────────────────────────────────────────────────────
+curl -s -X POST "$BASE/api/categories" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" -d '{"name":"ISO-CatA","emoji":"🅰️"}' >/dev/null
+curl -s -X POST "$BASE/api/categories" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"name":"ISO-CatB","emoji":"🅱️"}' >/dev/null
+[ "$(curl -s "$BASE/api/categories" -H "Authorization: Bearer $TA" | names)" = "ISO-CatA" ] || fail "A sees foreign categories"
+[ "$(curl -s "$BASE/api/categories" -H "Authorization: Bearer $TB" | names)" = "ISO-CatB" ] || fail "B sees foreign categories"
+A_CAT=$(curl -s "$BASE/api/categories" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/categories/$A_CAT" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/categories" -H "Authorization: Bearer $TA" | names)" = "ISO-CatA" ] || fail "cross-tenant delete removed A's category"
+
+# ── EXPENSES ──────────────────────────────────────────────────────────────────
+curl -s -X POST "$BASE/api/expenses" -H "Authorization: Bearer $TA" -H "Content-Type: application/json" -d '{"name":"ISO-ExpA","cat":"misc","amount":10,"date":"2026-01-01"}' >/dev/null
+curl -s -X POST "$BASE/api/expenses" -H "Authorization: Bearer $TB" -H "Content-Type: application/json" -d '{"name":"ISO-ExpB","cat":"misc","amount":20,"date":"2026-01-01"}' >/dev/null
+[ "$(curl -s "$BASE/api/expenses" -H "Authorization: Bearer $TA" | names)" = "ISO-ExpA" ] || fail "A sees foreign expenses"
+[ "$(curl -s "$BASE/api/expenses" -H "Authorization: Bearer $TB" | names)" = "ISO-ExpB" ] || fail "B sees foreign expenses"
+A_EXP=$(curl -s "$BASE/api/expenses" -H "Authorization: Bearer $TA" | first_id)
+curl -s -X DELETE "$BASE/api/expenses/$A_EXP" -H "Authorization: Bearer $TB" >/dev/null
+[ "$(curl -s "$BASE/api/expenses" -H "Authorization: Bearer $TA" | names)" = "ISO-ExpA" ] || fail "cross-tenant delete removed A's expense"
+
+echo "✅ PASS — tenant isolation holds for sales + products + categories + expenses"

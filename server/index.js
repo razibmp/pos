@@ -624,22 +624,22 @@ app.put("/api/settings/:key", requireRole("Owner"), async (req, res) => {
 });
 
 // ── CATEGORIES ───────────────────────────────────────────────────────────────
-app.get("/api/categories", async (_, res) => {
-  const [rows] = await q("SELECT * FROM categories ORDER BY id");
+app.get("/api/categories", async (req, res) => {
+  const [rows] = await tq(req, "SELECT * FROM categories WHERE tenant_id=? ORDER BY id", [tenantId(req)]);
   res.json(rows);
 });
 app.post("/api/categories", async (req, res) => {
   try {
-    const [r] = await q("INSERT INTO categories (name,emoji) VALUES (?,?)", [req.body.name, req.body.emoji||"🏷️"]);
+    const [r] = await tq(req, "INSERT INTO categories (tenant_id,name,emoji) VALUES (?,?,?)", [tenantId(req), req.body.name, req.body.emoji||"🏷️"]);
     res.json({ id: r.insertId, name: req.body.name, emoji: req.body.emoji||"🏷️" });
   } catch { res.status(400).json({ error: "Already exists" }); }
 });
 app.put("/api/categories/:id", async (req, res) => {
-  await q("UPDATE categories SET name=?,emoji=? WHERE id=?", [req.body.name, req.body.emoji, req.params.id]);
+  await tq(req, "UPDATE categories SET name=?,emoji=? WHERE id=? AND tenant_id=?", [req.body.name, req.body.emoji, req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 app.delete("/api/categories/:id", async (req, res) => {
-  await q("DELETE FROM categories WHERE id=?", [req.params.id]);
+  await tq(req, "DELETE FROM categories WHERE id=? AND tenant_id=?", [req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 
@@ -720,8 +720,8 @@ app.delete("/api/sales/:id", async (req, res) => {
 });
 
 // ── EXPENSES ─────────────────────────────────────────────────────────────────
-app.get("/api/expenses", async (_, res) => {
-  const [rows] = await q("SELECT * FROM expenses ORDER BY id DESC");
+app.get("/api/expenses", async (req, res) => {
+  const [rows] = await tq(req, "SELECT * FROM expenses WHERE tenant_id=? ORDER BY id DESC", [tenantId(req)]);
   res.json(rows.map(r=>({...r,
     date: r.date?.toISOString?.().split("T")[0] || r.date,
     amount: +r.amount
@@ -729,12 +729,12 @@ app.get("/api/expenses", async (_, res) => {
 });
 app.post("/api/expenses", async (req, res) => {
   const e = req.body;
-  const [r] = await q("INSERT INTO expenses (name,cat,amount,date,notes) VALUES (?,?,?,?,?)",
-    [e.name, e.cat, e.amount, e.date, e.notes||""]);
+  const [r] = await tq(req, "INSERT INTO expenses (tenant_id,name,cat,amount,date,notes) VALUES (?,?,?,?,?,?)",
+    [tenantId(req), e.name, e.cat, e.amount, e.date, e.notes||""]);
   res.json({ ...e, id: r.insertId });
 });
 app.delete("/api/expenses/:id", async (req, res) => {
-  await q("DELETE FROM expenses WHERE id=?", [req.params.id]);
+  await tq(req, "DELETE FROM expenses WHERE id=? AND tenant_id=?", [req.params.id, tenantId(req)]);
   res.json({ ok: true });
 });
 
