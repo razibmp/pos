@@ -473,6 +473,7 @@ const PUBLIC_API = new Set([
   "/webhook/woocommerce",
   "/webhook/pathao",
   "/health",
+  "/tenant",          // public workspace lookup (login-screen branding)
   "/admin/tenants",   // platform-admin routes: guarded by X-Admin-Token, not a user JWT
 ]);
 // Guard: every /api route requires a valid token unless explicitly public
@@ -548,12 +549,19 @@ const _tenantCache = new Map();
 async function tenantBySlug(slug) {
   if (!slug) return null;
   if (_tenantCache.has(slug)) return _tenantCache.get(slug);
-  const [[row]] = await q("SELECT id, slug, status FROM tenants WHERE slug=?", [slug]);
+  const [[row]] = await q("SELECT id, slug, name, status FROM tenants WHERE slug=?", [slug]);
   if (row) _tenantCache.set(slug, row);
   return row || null;
 }
 const resolveSlug = (req) =>
   (req.headers["x-tenant"] || req.body?.tenant || "thc").toString().toLowerCase().trim();
+
+// Public: resolve the current workspace so the login screen can show its name
+app.get("/api/tenant", async (req, res) => {
+  const t = await tenantBySlug(resolveSlug(req));
+  if (!t || t.status !== "active") return res.status(404).json({ error: "Unknown workspace" });
+  res.json({ slug: t.slug, name: t.name });
+});
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 app.post("/api/login", async (req, res) => {

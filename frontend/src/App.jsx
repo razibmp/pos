@@ -16,10 +16,11 @@ const ROLE_PERMS = {
   Manager:{tabs:["dashboard","purchases","inventory","sales","expenses","reports","categories","stakeholders","deliveries","stock-history","woocommerce","preorders","orders"],seeFinancials:true},
   Staff:  {tabs:["sales","inventory"],seeFinancials:false},
 };
-const SESSION_KEY = "hc_session";
-const saveSession  = (u) => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); } catch {} };
-const loadSession  = ()  => { try { const s=localStorage.getItem(SESSION_KEY); return s?JSON.parse(s):null; } catch { return null; } };
-const clearSession = ()  => { try { localStorage.removeItem(SESSION_KEY); } catch {} };
+// Session is namespaced per workspace (see api.sessionKey) so two tenants can be
+// open in the same browser without sharing a login.
+const saveSession  = (u) => { try { localStorage.setItem(API.sessionKey(), JSON.stringify(u)); } catch {} };
+const loadSession  = ()  => { try { const s=localStorage.getItem(API.sessionKey()); return s?JSON.parse(s):null; } catch { return null; } };
+const clearSession = ()  => { try { localStorage.removeItem(API.sessionKey()); } catch {} };
 
 const css = `
 /* System font stack — zero network fetch, instant first paint */
@@ -141,7 +142,7 @@ const Empty=({msg})=><div style={{textAlign:"center",color:"#AEAEB2",padding:"28
 const TH=({cols})=><tr style={{borderBottom:"1px solid #F2F2F7"}}>{cols.map((h,i)=><th key={i} style={{textAlign:"left",padding:"9px 12px",fontSize:11,fontWeight:600,color:"#6E6E73",letterSpacing:"-.01em",whiteSpace:"nowrap",background:"#FAFAFA"}}>{h}</th>)}</tr>;
 
 // ── LOGIN ────────────────────────────────────────────────────────────────────
-function Login({onLogin}){
+function Login({onLogin,brand}){
   const [un,setUN]=useState("");const [pw,setPW]=useState("");const [err,setErr]=useState("");const [loading,setLoading]=useState(false);
   const submit=async()=>{
     setLoading(true);setErr("");
@@ -158,8 +159,8 @@ function Login({onLogin}){
         {/* Brand header */}
         <div className="login-hd" style={{background:"linear-gradient(135deg,#FF6B35 0%,#FF8C42 100%)",display:"flex",flexDirection:"column",alignItems:"center"}}>
           <div style={{width:68,height:68,borderRadius:"50%",background:"rgba(255,255,255,.2)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,.4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:34,marginBottom:14}}>🎮</div>
-          <div style={{fontSize:20,fontWeight:700,color:"#fff",letterSpacing:"-.02em",textAlign:"center"}}>The Hobby Center</div>
-          <div style={{fontSize:12,color:"rgba(255,255,255,.75)",fontWeight:500,marginTop:5,letterSpacing:".01em",textAlign:"center"}}>Management Dashboard · Bangladesh</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#fff",letterSpacing:"-.02em",textAlign:"center"}}>{brand||"The Hobby Center"}</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.75)",fontWeight:500,marginTop:5,letterSpacing:".01em",textAlign:"center"}}>Management Dashboard</div>
         </div>
         {/* Form */}
         <div className="login-bd" style={{background:"#fff"}}>
@@ -1874,7 +1875,12 @@ export default function App(){
   const [cats,setCats]=useState([]);const [stakeholders,setStakeholders]=useState([]);const [users,setUsers]=useState([]);const [deliveries,setDeliveries]=useState([]);const [pendingOrders,setPendingOrders]=useState([]);const [deliveryStats,setDeliveryStats]=useState([]);const [stockHistory,setStockHistory]=useState([]);
   const [tab,setTab]=useState(()=>{const u=loadSession();return u?(ROLE_PERMS[u.role]||ROLE_PERMS.Staff).tabs[0]:"dashboard"});
   const [toast,setToast]=useState(null);const [menuOpen,setMenuOpen]=useState(false);
+  const [brand,setBrand]=useState(null);
   const t=msg=>setToast(msg);
+
+  // Resolve this workspace's display name (path-based tenant: /thc, /apple …)
+  useEffect(()=>{API.getTenantInfo().then(x=>setBrand(x?.name||null)).catch(()=>{});},[]);
+  const brandName = brand || (API.getSlug()==="thc" ? "The Hobby Center" : API.getSlug());
 
 
 
@@ -1918,7 +1924,7 @@ export default function App(){
   const doLogin=u=>{saveSession(u);setUser(u);const p=ROLE_PERMS[u.role]||ROLE_PERMS.Staff;setTab(p.tabs[0]);setMenuOpen(false)};
   const doLogout=()=>{clearSession();API.clearToken?.();setUser(null);setTab("dashboard");setMenuOpen(false)};
 
-  if(!user)return <Login onLogin={doLogin}/>;
+  if(!user)return <Login onLogin={doLogin} brand={brandName}/>;
 
 ;
 
@@ -1951,7 +1957,7 @@ export default function App(){
     <div style={{background:"#15151E",padding:"0 12px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,position:"sticky",top:0,zIndex:100,borderBottom:"3px solid #E8002D"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
         <div style={{width:30,height:30,borderRadius:8,background:"#E8002D",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🎮</div>
-        <span style={{fontSize:13,fontWeight:800,color:"#fff",letterSpacing:"-.01em",textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>The Hobby Center</span>
+        <span style={{fontSize:13,fontWeight:800,color:"#fff",letterSpacing:"-.01em",textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{brandName}</span>
       </div>
       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
         <div className="hide-mobile" style={{fontSize:12,color:"rgba(255,255,255,.45)",fontWeight:500}}>{dateStr}</div>

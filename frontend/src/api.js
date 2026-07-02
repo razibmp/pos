@@ -1,8 +1,21 @@
 const BASE = '/api';
-const TOKEN_KEY = 'hc_token';
-const getToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } };
-const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} };
+
+// The workspace slug is the first path segment (/thc, /apple). Root "/" ⇒ thc,
+// keeping existing single-tenant bookmarks working.
+export const getSlug = () => {
+  try {
+    const seg = (window.location.pathname.split('/')[1] || '').toLowerCase();
+    return /^[a-z0-9-]{2,40}$/.test(seg) ? seg : 'thc';
+  } catch { return 'thc'; }
+};
+
+// Token + session are namespaced per workspace so two tenants can be open in the
+// same browser without clobbering each other.
+const TOKEN_KEY = () => 'hc_token_' + getSlug();
+const getToken = () => { try { return localStorage.getItem(TOKEN_KEY()); } catch { return null; } };
+const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY(), t) : localStorage.removeItem(TOKEN_KEY()); } catch {} };
 export const clearToken = () => setToken(null);
+export const sessionKey = () => 'hc_session_' + getSlug();
 
 async function api(path, opts = {}) {
   const url = BASE + path;
@@ -10,6 +23,7 @@ async function api(path, opts = {}) {
   const res = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
+      "X-Tenant": getSlug(),
       ...(token ? { Authorization: "Bearer " + token } : {}),
       ...opts.headers,
     },
@@ -19,7 +33,7 @@ async function api(path, opts = {}) {
   if (res.status === 401) {
     // Token missing/expired — drop the stale session and force a fresh login
     clearToken();
-    try { localStorage.removeItem('hc_session'); } catch {}
+    try { localStorage.removeItem(sessionKey()); } catch {}
     if (typeof window !== "undefined" && path !== "/login") window.location.reload();
   }
   if (!res.ok) {
@@ -33,6 +47,9 @@ export const login = async (d) => {
   if (r && r.token) setToken(r.token);
   return r;
 };
+// Public workspace info (for login-screen branding)
+export const getTenantInfo = ()       => api("/tenant");
+
 // Integration settings (Owner only)
 export const getSettings   = ()       => api("/settings");
 export const saveSettings  = (key,d)  => api(`/settings/${key}`, { method: "PUT", body: d });
